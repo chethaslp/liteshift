@@ -25,14 +25,12 @@ export interface User {
 export interface App {
     id: number;
     name: string;
-    pm2_id?: number;
-    repository_url?: string;
+    repository_url: string | null;
     branch: string;
-    deploy_path: string;
-    start_command: string;
-    build_command?: string;
+    build_command: string | null;
     install_command: string;
-    status: string;
+    start_command: string;
+    runtime: 'node' | 'python' | 'bun';
     created_at: string; // ISO date string
     updated_at: string; // ISO date string
 }
@@ -95,4 +93,54 @@ export interface Setting {
     key: string;
     value: string;
     updated_at: string; // ISO date string
+}
+
+/**
+ * Enhanced SystemD Service Status model from systemctl:status response
+ */
+export interface ServiceStatus {
+    name: string;
+    status: 'active' | 'inactive' | 'failed' | 'unknown';
+    enabled: boolean;
+    description: string;
+    runtime: 'node' | 'python' | 'bun';
+    cwd?: string;
+    // Enhanced parsed systemctl status information
+    loaded: {
+        state: 'loaded' | 'not-found' | 'bad-setting' | 'error' | 'masked';
+        path: string;
+        enabled: 'enabled' | 'disabled' | 'static' | 'masked';
+        preset: 'enabled' | 'disabled';
+    };
+    active: {
+        state: 'active' | 'inactive' | 'failed' | 'activating' | 'deactivating';
+        subState: string;
+        since: string;
+        duration: string;
+    };
+    mainPid?: {
+        pid: number;
+        command: string;
+    };
+    tasks?: {
+        current: number;
+        limit: number;
+    };
+    memory?: {
+        current: string;
+        peak?: string;
+        currentBytes?: number;
+        peakBytes?: number;
+    };
+    cpu?: {
+        usage?: string;
+        usageNSec?: number;
+    };
+    cgroup?: {
+        path: string;
+        processes: Array<{
+            pid: number;
+            command: string;
+        }>;
+    };
 }

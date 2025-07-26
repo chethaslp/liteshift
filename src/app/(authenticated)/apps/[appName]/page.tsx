@@ -6,111 +6,57 @@ import ComponentCard from "@/components/common/ComponentCard";
 import Button from "@/components/ui/button/Button";
 import Badge from "@/components/ui/badge/Badge";
 import Alert from "@/components/ui/alert/Alert";
-import { FaBackward } from "react-icons/fa";
-import { LuSendToBack } from "react-icons/lu";
 import { IoMdArrowBack } from "react-icons/io";
-
-interface AppDetails {
-  pm_id: number;
-  name: string;
-  status: string;
-  pid?: number;
-  cpu: number;
-  memory: number;
-  uptime: number;
-  restarts: number;
-  unstable_restarts: number;
-  created_at: number;
-  pm2_env?: {
-    PM2_HOME: string;
-    status: string;
-    restart_time: number;
-    unstable_restarts: number;
-    created_at: number;
-    pm_uptime: number;
-    axm_options?: any;
-    instances?: number;
-    exec_mode?: string;
-    watch?: boolean;
-    pm_exec_path?: string;
-    pm_cwd?: string;
-    exec_interpreter?: string;
-    pm_out_log_path?: string;
-    pm_err_log_path?: string;
-    pm_log_path?: string;
-    node_args?: string[];
-    args?: string[];
-    env?: Record<string, string>;
-  };
-}
-
-interface AppDescription {
-  pid: number;
-  name: string;
-  pm2_env: {
-    status: string;
-    restart_time: number;
-    unstable_restarts: number;
-    created_at: number;
-    pm_uptime: number;
-    pm_id: number;
-    instances: number;
-    exec_mode: string;
-    watch: boolean;
-    pm_exec_path: string;
-    pm_cwd: string;
-    exec_interpreter: string;
-    pm_out_log_path: string;
-    pm_err_log_path: string;
-    pm_log_path: string;
-    node_args: string[];
-    args: string[];
-    env: Record<string, string>;
-  };
-  monit: {
-    memory: number;
-    cpu: number;
-  };
-}
+import { useSocketContext } from "@/context/SocketContext";
+import { App as AppDetails, ServiceStatus } from "@/lib/models";
 
 export default function AppDetailPage() {
   const router = useRouter();
   const params = useParams();
   const appName = decodeURIComponent(params.appName as string);
+  const { socket } = useSocketContext();
 
   const [appDetails, setAppDetails] = useState<AppDetails | null>(null);
-  const [appDescription, setAppDescription] = useState<AppDescription | null>(null);
+  const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [logs, setLogs] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [refreshInterval, setRefreshInterval] = useState<NodeJS.Timeout | null>(null);
 
   const fetchAppData = async () => {
+    if (!socket) return;
+
     try {
-      // Fetch basic app info
-      const listResponse = await fetch('/api/pm2?action=list');
-      const listData = await listResponse.json();
+      setError(null);
       
-      if (listData.success) {
-        const app = listData.data.find((app: AppDetails) => app.name === appName);
-        if (app) {
-          setAppDetails(app);
-        } else {
-          setError(`Application "${appName}" not found`);
-          return;
-        }
+      // Fetch app details from database
+      const appResponse = await socket.emitWithAck('app:get', { appName });
+      
+      if (appResponse.success && appResponse.data.app) {
+        setAppDetails(appResponse.data.app);
+      } else {
+        setError(`Application "${appName}" not found`);
+        return;
+      }
+
+      // Fetch systemctl service status
+      const statusResponse = await socket.emitWithAck('systemctl:status', { appName });
+      
+      if (statusResponse.success) {
+        setServiceStatus(statusResponse.data.status);
       }
 
       // Fetch logs
-      const logsResponse = await fetch(`/api/pm2?action=logs&appName=${encodeURIComponent(appName)}&lines=100`);
-      const logsData = await logsResponse.json();
+      const logsResponse = await socket.emitWithAck('systemctl:logs', {
+        appName,
+        lines: 100
+      });
       
-      if (logsData.success) {
-        setLogs(logsData.data.logs);
+      if (logsResponse.success) {
+        setLogs(logsResponse.data.logs || '');
       }
 
-      setError(null);
     } catch (err) {
       setError('Failed to fetch application data');
       console.error('Error fetching app data:', err);
@@ -120,31 +66,34 @@ export default function AppDetailPage() {
   };
 
   useEffect(() => {
-    fetchAppData();
-  }, [appName]);
+    if (socket) {
+      fetchAppData();
+    }
+  }, [socket, appName]);
 
-  const executeAction = async (action: string) => {
+  // Clear success message after 5 seconds
+  useEffect(() => {
+    if (success) {
+      const timer = setTimeout(() => setSuccess(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [success]);
+
+  const executeAction = async (action: string, eventName: string, successMessage: string) => {
+    if (!socket) return;
+
     try {
       setActionLoading(action);
+      setError(null);
       
-      const response = await fetch('/api/pm2', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action,
-          appName
-        }),
-      });
-
-      const data = await response.json();
+      const response = await socket.emitWithAck(eventName, { appName });
       
-      if (data.success) {
+      if (response.success) {
+        setSuccess(successMessage);
         // Refresh data after action
         setTimeout(fetchAppData, 1000);
       } else {
-        setError(data.error || `Failed to ${action} application`);
+        setError(response.error || `Failed to ${action} application`);
       }
     } catch (err) {
       setError(`Failed to ${action} application`);
@@ -159,19 +108,19 @@ export default function AppDetailPage() {
       return;
     }
 
+    if (!socket) return;
+
     try {
       setActionLoading('delete');
+      setError(null);
       
-      const response = await fetch(`/api/pm2?appName=${encodeURIComponent(appName)}`, {
-        method: 'DELETE',
-      });
-
-      const data = await response.json();
+      const response = await socket.emitWithAck('app:delete', { appName });
       
-      if (data.success) {
+      if (response.success) {
+        setSuccess('Application deleted successfully');
         router.push('/apps');
       } else {
-        setError(data.error || 'Failed to delete application');
+        setError(response.error || 'Failed to delete application');
       }
     } catch (err) {
       setError('Failed to delete application');
@@ -186,28 +135,19 @@ export default function AppDetailPage() {
       return;
     }
 
+    if (!socket) return;
+
     try {
       setActionLoading('redeploy');
+      setError(null);
       
-      const response = await fetch('/api/manager', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'redeploy',
-          appName
-        }),
-      });
-
-      const data = await response.json();
+      const response = await socket.emitWithAck('deploy:redeploy', { appName });
       
-      if (data.success) {
-        const queueInfo = data.data;
-        alert(`Redeploy queued successfully! Queue ID: ${queueInfo.queueId}\n\n${queueInfo.message}\n\nThe application will be redeployed shortly. You can monitor the status from the main apps page.`);
-        // Don't refresh immediately, wait for deployment to complete
+      if (response.success) {
+        const queueInfo = response.data;
+        setSuccess(`Redeploy queued successfully! Queue ID: ${queueInfo.queueId}. ${queueInfo.message}`);
       } else {
-        setError(data.error || 'Failed to queue redeploy');
+        setError(response.error || 'Failed to queue redeploy');
       }
     } catch (err) {
       setError('Failed to redeploy application');
@@ -217,45 +157,26 @@ export default function AppDetailPage() {
     }
   };
 
-  const formatMemory = (bytes: number) => {
-    const mb = bytes / 1024 / 1024;
-    return `${mb.toFixed(1)} MB`;
-  };
-
-  const formatUptime = (ms: number) => {
-    if (!ms) return '0s';
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
-
-    if (days > 0) return `${days}d ${hours % 24}h`;
-    if (hours > 0) return `${hours}h ${minutes % 60}m`;
-    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-    return `${seconds}s`;
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleString();
   };
 
   const getStatusBadgeColor = (status: string) => {
     switch (status) {
-      case 'online':
+      case 'active':
         return 'success';
-      case 'stopped':
+      case 'inactive':
         return 'error';
-      case 'stopping':
-      case 'starting':
-        return 'warning';
-      case 'errored':
+      case 'failed':
         return 'error';
+      case 'unknown':
+        return 'light';
       default:
         return 'light';
     }
   };
 
-  const formatDate = (timestamp: number) => {
-    return new Date(timestamp).toLocaleString();
-  };
-
-  if (loading) {
+  if (loading || !socket) {
     return (
       <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
         <div className="flex items-center justify-between">
@@ -273,7 +194,9 @@ export default function AppDetailPage() {
         </div>
         <div className="flex items-center flex-col justify-center h-64">
           <div className="animate-spin rounded-full mb-2 h-8 w-8 border-b-2 border-brand-600"></div>
-          <span className="ml-2 text-gray-600 dark:text-gray-400">Loading application details...</span>
+          <span className="ml-2 text-gray-600 dark:text-gray-400">
+            {!socket ? 'Connecting to server...' : 'Loading application details...'}
+          </span>
         </div>
       </div>
     );
@@ -322,21 +245,26 @@ export default function AppDetailPage() {
             {appDetails && (
               <div className="flex items-center space-x-2 mt-1">
                 <Badge 
-                  color={getStatusBadgeColor(appDetails.status)}
+                  color={getStatusBadgeColor(serviceStatus?.status || 'unknown')}
                   variant="light"
                   size="sm"
                 >
-                  {appDetails.status}
+                  {serviceStatus?.status || 'unknown'}
                 </Badge>
-                <span className="text-sm text-gray-500 dark:text-gray-400">ID: {appDetails.pm_id}</span>
-                <span className="text-sm text-gray-500 dark:text-gray-400">PID: {appDetails.pid}</span>
+                <span className="text-sm text-gray-500 dark:text-gray-400">ID: {appDetails.id}</span>
+                <span className="text-sm text-gray-500 dark:text-gray-400">Runtime: {appDetails.runtime}</span>
+                {serviceStatus?.enabled && (
+                  <Badge color="info" variant="light" size="sm">
+                    Auto-start
+                  </Badge>
+                )}
               </div>
             )}
           </div>
         </div>
         <Button
           onClick={fetchAppData}
-          disabled={loading}
+          disabled={!socket || loading}
           variant="primary"
         >
           Refresh
@@ -351,119 +279,284 @@ export default function AppDetailPage() {
         />
       )}
 
+      {success && (
+        <Alert
+          variant="success"
+          title="Success"
+          message={success}
+        />
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Application Info */}
-        <ComponentCard title="Application Info" desc="Current status and performance metrics">
+        <ComponentCard title="Application Info" desc="Current configuration and service details">
           {appDetails && (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">CPU Usage</div>
-                  <div className="text-lg font-semibold text-gray-900 dark:text-white">{appDetails.cpu.toFixed(1)}%</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">Service Status</div>
+                  <div className="text-lg font-semibold text-gray-900 dark:text-white">
+                    {serviceStatus?.status || 'unknown'}
+                  </div>
                 </div>
                 <div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">Memory Usage</div>
-                  <div className="text-lg font-semibold text-gray-900 dark:text-white">{formatMemory(appDetails.memory)}</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">Auto-start</div>
+                  <div className="text-lg font-semibold text-gray-900 dark:text-white">
+                    {serviceStatus?.enabled ? 'Enabled' : 'Disabled'}
+                  </div>
                 </div>
                 <div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">Uptime</div>
-                  <div className="text-lg font-semibold text-gray-900 dark:text-white">{formatUptime(appDetails.uptime)}</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">Runtime</div>
+                  <div className="text-lg font-semibold text-gray-900 dark:text-white capitalize">
+                    {appDetails.runtime}
+                  </div>
                 </div>
                 <div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">Restarts</div>
-                  <div className="text-lg font-semibold text-gray-900 dark:text-white">{appDetails.restarts}</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">Branch</div>
+                  <div className="text-lg font-semibold text-gray-900 dark:text-white">
+                    {appDetails.branch}
+                  </div>
                 </div>
               </div>
               
-              {appDescription && (
-                <div className="mt-6 space-y-3">
+              <div className="mt-6 space-y-3">
+                {appDetails.repository_url && (
                   <div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400">Execution Path</div>
+                    <div className="text-sm text-gray-500 dark:text-gray-400">Repository</div>
                     <div className="text-sm font-mono text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-800/50 p-2 rounded">
-                      {appDescription.pm2_env.pm_exec_path}
+                      {appDetails.repository_url}
                     </div>
                   </div>
+                )}
+                
+                <div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">Start Command</div>
+                  <div className="text-sm font-mono text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-800/50 p-2 rounded">
+                    {appDetails.start_command}
+                  </div>
+                </div>
+                
+                {appDetails.install_command && (
+                  <div>
+                    <div className="text-sm text-gray-500 dark:text-gray-400">Install Command</div>
+                    <div className="text-sm font-mono text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-800/50 p-2 rounded">
+                      {appDetails.install_command}
+                    </div>
+                  </div>
+                )}
+                
+                {appDetails.build_command && (
+                  <div>
+                    <div className="text-sm text-gray-500 dark:text-gray-400">Build Command</div>
+                    <div className="text-sm font-mono text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-800/50 p-2 rounded">
+                      {appDetails.build_command}
+                    </div>
+                  </div>
+                )}
+                
+                {serviceStatus?.cwd && (
                   <div>
                     <div className="text-sm text-gray-500 dark:text-gray-400">Working Directory</div>
                     <div className="text-sm font-mono text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-800/50 p-2 rounded">
-                      {appDescription.pm2_env.pm_cwd}
+                      {serviceStatus.cwd}
                     </div>
                   </div>
-                  <div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400">Execution Mode</div>
-                    <div className="text-sm text-gray-900 dark:text-white">{appDescription.pm2_env.exec_mode}</div>
+                )}
+                
+                <div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">Created At</div>
+                  <div className="text-sm text-gray-900 dark:text-white">{formatDate(appDetails.created_at)}</div>
+                </div>
+                
+                <div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">Last Updated</div>
+                  <div className="text-sm text-gray-900 dark:text-white">{formatDate(appDetails.updated_at)}</div>
+                </div>
+              </div>
+            </div>
+          )}
+        </ComponentCard>
+
+        {/* Enhanced Service Status */}
+        {serviceStatus && (
+          <ComponentCard title="Service Details" desc="Detailed systemctl service information">
+            <div className="space-y-4">
+              {serviceStatus.loaded && (
+                <div>
+                  <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Service Configuration</div>
+                  <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-lg space-y-2">
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600 dark:text-gray-400">State:</span>
+                      <span className="text-sm font-medium text-gray-900 dark:text-white">{serviceStatus.loaded.state}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600 dark:text-gray-400">Path:</span>
+                      <span className="text-sm font-mono text-gray-900 dark:text-white">{serviceStatus.loaded.path}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600 dark:text-gray-400">Enabled:</span>
+                      <span className="text-sm font-medium text-gray-900 dark:text-white">{serviceStatus.loaded.enabled}</span>
+                    </div>
                   </div>
-                  <div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400">Instances</div>
-                    <div className="text-sm text-gray-900 dark:text-white">{appDescription.pm2_env.instances}</div>
+                </div>
+              )}
+
+              {serviceStatus.active && (
+                <div>
+                  <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Active Status</div>
+                  <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-lg space-y-2">
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600 dark:text-gray-400">State:</span>
+                      <Badge color={serviceStatus.active.state === 'active' ? 'success' : 'error'} size="sm">
+                        {serviceStatus.active.state}
+                      </Badge>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600 dark:text-gray-400">Sub-state:</span>
+                      <span className="text-sm font-medium text-gray-900 dark:text-white">{serviceStatus.active.subState}</span>
+                    </div>
+                    {serviceStatus.active.since && (
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600 dark:text-gray-400">Since:</span>
+                        <span className="text-sm text-gray-900 dark:text-white">{serviceStatus.active.since}</span>
+                      </div>
+                    )}
+                    {serviceStatus.active.duration && (
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600 dark:text-gray-400">Duration:</span>
+                        <span className="text-sm text-gray-900 dark:text-white">{serviceStatus.active.duration}</span>
+                      </div>
+                    )}
                   </div>
-                  <div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400">Created At</div>
-                    <div className="text-sm text-gray-900 dark:text-white">{formatDate(appDescription.pm2_env.created_at)}</div>
+                </div>
+              )}
+
+              {serviceStatus.mainPid && (
+                <div>
+                  <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Main Process</div>
+                  <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-lg space-y-2">
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600 dark:text-gray-400">PID:</span>
+                      <span className="text-sm font-mono text-gray-900 dark:text-white">{serviceStatus.mainPid.pid}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600 dark:text-gray-400">Command:</span>
+                      <span className="text-sm font-mono text-gray-900 dark:text-white truncate ml-2">{serviceStatus.mainPid.command}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {(serviceStatus.memory || serviceStatus.cpu || serviceStatus.tasks) && (
+                <div>
+                  <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Resource Usage</div>
+                  <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-lg space-y-2">
+                    {serviceStatus.memory && (
+                      <>
+                        <div className="flex justify-between">
+                          <span className="text-sm text-gray-600 dark:text-gray-400">Memory (Current):</span>
+                          <span className="text-sm font-medium text-gray-900 dark:text-white">{serviceStatus.memory.current}</span>
+                        </div>
+                        {serviceStatus.memory.peak && (
+                          <div className="flex justify-between">
+                            <span className="text-sm text-gray-600 dark:text-gray-400">Memory (Peak):</span>
+                            <span className="text-sm font-medium text-gray-900 dark:text-white">{serviceStatus.memory.peak}</span>
+                          </div>
+                        )}
+                      </>
+                    )}
+                    {serviceStatus.cpu && serviceStatus.cpu.usage && (
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600 dark:text-gray-400">CPU Time:</span>
+                        <span className="text-sm font-medium text-gray-900 dark:text-white">{serviceStatus.cpu.usage}</span>
+                      </div>
+                    )}
+                    {serviceStatus.tasks && (
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600 dark:text-gray-400">Tasks:</span>
+                        <span className="text-sm font-medium text-gray-900 dark:text-white">{serviceStatus.tasks.current} / {serviceStatus.tasks.limit}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {serviceStatus.cgroup && serviceStatus.cgroup.processes && serviceStatus.cgroup.processes.length > 0 && (
+                <div>
+                  <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Process Tree</div>
+                  <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-lg">
+                    <div className="space-y-1 max-h-32 overflow-y-auto">
+                      {serviceStatus.cgroup.processes.map((process, index) => (
+                        <div key={index} className="flex justify-between text-xs">
+                          <span className="font-mono text-gray-600 dark:text-gray-400">{process.pid}</span>
+                          <span className="font-mono text-gray-900 dark:text-white truncate ml-2">{process.command}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
               )}
             </div>
-          )}
-        </ComponentCard>
+          </ComponentCard>
+        )}
 
         {/* Actions */}
         <ComponentCard title="Actions" desc="Manage your application">
           <div className="grid grid-cols-2 gap-3">
             <Button
-              onClick={() => executeAction('start')}
-              disabled={actionLoading === 'start' || appDetails?.status === 'online'}
+              onClick={() => executeAction('start', 'systemctl:start', 'Service started successfully')}
+              disabled={!socket || actionLoading === 'start' || serviceStatus?.status === 'active'}
               variant="primary"
               className="bg-green-600 hover:bg-green-700 disabled:bg-green-300"
             >
               {actionLoading === 'start' ? 'Starting...' : 'Start'}
             </Button>
             <Button
-              onClick={() => executeAction('stop')}
-              disabled={actionLoading === 'stop' || appDetails?.status === 'stopped'}
+              onClick={() => executeAction('stop', 'systemctl:stop', 'Service stopped successfully')}
+              disabled={!socket || actionLoading === 'stop' || serviceStatus?.status === 'inactive'}
               variant="primary"
               className="bg-red-600 hover:bg-red-700 disabled:bg-red-300"
             >
               {actionLoading === 'stop' ? 'Stopping...' : 'Stop'}
             </Button>
             <Button
-              onClick={() => executeAction('restart')}
-              disabled={actionLoading === 'restart'}
+              onClick={() => executeAction('restart', 'systemctl:restart', 'Service restarted successfully')}
+              disabled={!socket || actionLoading === 'restart'}
               variant="primary"
               className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300"
             >
               {actionLoading === 'restart' ? 'Restarting...' : 'Restart'}
             </Button>
             <Button
-              onClick={() => executeAction('reload')}
-              disabled={actionLoading === 'reload'}
-              variant="primary"
-              className="bg-yellow-600 hover:bg-yellow-700 disabled:bg-yellow-300"
-            >
-              {actionLoading === 'reload' ? 'Reloading...' : 'Reload'}
-            </Button>
-            <Button
-              onClick={() => executeAction('reset')}
-              disabled={actionLoading === 'reset'}
+              onClick={() => executeAction('enable', 'systemctl:enable', 'Auto-start enabled successfully')}
+              disabled={!socket || actionLoading === 'enable' || serviceStatus?.enabled}
               variant="primary"
               className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300"
             >
-              {actionLoading === 'reset' ? 'Resetting...' : 'Reset Stats'}
+              {actionLoading === 'enable' ? 'Enabling...' : 'Enable Auto-start'}
             </Button>
             <Button
-              onClick={() => executeAction('flush')}
-              disabled={actionLoading === 'flush'}
+              onClick={() => executeAction('disable', 'systemctl:disable', 'Auto-start disabled successfully')}
+              disabled={!socket || actionLoading === 'disable' || !serviceStatus?.enabled}
+              variant="primary"
+              className="bg-yellow-600 hover:bg-yellow-700 disabled:bg-yellow-300"
+            >
+              {actionLoading === 'disable' ? 'Disabling...' : 'Disable Auto-start'}
+            </Button>
+            <Button
+              onClick={fetchAppData}
+              disabled={!socket || loading}
               variant="primary"
               className="bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300"
             >
-              {actionLoading === 'flush' ? 'Flushing...' : 'Flush Logs'}
+              {loading ? 'Refreshing...' : 'Refresh Status'}
             </Button>
           </div>
           
           <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700 space-y-3">
             <Button
               onClick={redeployApp}
-              disabled={actionLoading === 'redeploy'}
+              disabled={!socket || actionLoading === 'redeploy'}
               variant="primary"
               className="w-full bg-orange-600 hover:bg-orange-700 disabled:bg-orange-300"
             >
@@ -471,7 +564,7 @@ export default function AppDetailPage() {
             </Button>
             <Button
               onClick={deleteApp}
-              disabled={actionLoading === 'delete'}
+              disabled={!socket || actionLoading === 'delete'}
               variant="primary"
               className="w-full bg-red-600 hover:bg-red-700 disabled:bg-red-300"
             >
@@ -482,7 +575,7 @@ export default function AppDetailPage() {
       </div>
 
       {/* Logs */}
-      <ComponentCard title="Application Logs" desc="Real-time application output">
+      <ComponentCard title="Service Logs" desc="Real-time systemctl service output (journalctl)">
         <div className="bg-black text-green-400 font-mono text-sm p-4 rounded-lg h-96 overflow-y-auto">
           {logs ? (
             <pre className="whitespace-pre-wrap">{logs}</pre>

@@ -8,11 +8,11 @@ import Alert from "@/components/ui/alert/Alert";
 import { Modal } from "@/components/ui/modal";
 import InputField from "@/components/form/input/InputField";
 import Label from "@/components/form/Label";
-import { FaPlay, FaStop, FaRedo, FaPlus, FaTrash, FaCheck, FaTimes, FaExternalLinkAlt } from "react-icons/fa";
+import { FaPlay, FaStop, FaRedo, FaPlus, FaTrash, FaCheck, FaTimes, FaExternalLinkAlt, FaSyncAlt } from "react-icons/fa";
+import { useSocketContext } from "@/context/SocketContext";
 
 interface CaddyStatus {
   running: boolean;
-  version: string;
   status: any;
 }
 
@@ -26,6 +26,10 @@ interface Domain {
   created_at: string;
 }
 
+interface App {
+  name: string;
+}
+
 export default function CaddyPage() {
   const [status, setStatus] = useState<CaddyStatus | null>(null);
   const [domains, setDomains] = useState<Domain[]>([]);
@@ -33,64 +37,74 @@ export default function CaddyPage() {
   const [logs, setLogs] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [showAddDomainModal, setShowAddDomainModal] = useState(false);
   const [showConfigModal, setShowConfigModal] = useState(false);
+  const [showLogsModal, setShowLogsModal] = useState(false);
   const [configValid, setConfigValid] = useState<boolean | null>(null);
 
   // Form state for adding domain
   const [newDomain, setNewDomain] = useState({
     appName: '',
-    domain: '',
-    isPrimary: false
+    domain: ''
   });
 
-  const [apps, setApps] = useState<Array<{ name: string }>>([]);
+  const [apps, setApps] = useState<App[]>([]);
+  const { socket } = useSocketContext();
 
-  const fetchData = async () => {
+  const fetchStatus = async () => {
+    if (!socket) return;
+    
     try {
-      setLoading(true);
-      setError(null);
-
-      // Fetch Caddy status
-      const statusResponse = await fetch('/api/caddy?action=status');
-      const statusData = await statusResponse.json();
-      
-      if (statusData.success) {
-        setStatus(statusData.data);
+      const response = await socket.emitWithAck('caddy:status', {});
+      if (response.success) {
+        setStatus(response.data);
+        setError(null);
+      } else {
+        setError(response.error || 'Failed to fetch Caddy status');
       }
-
-      // Fetch domains
-      const domainsResponse = await fetch('/api/caddy?action=domains');
-      const domainsData = await domainsResponse.json();
-      
-      if (domainsData.success) {
-        setDomains(domainsData.data.domains);
-      }
-
-      // Fetch apps for dropdown
-      const appsResponse = await fetch('/api/pm2?action=list');
-      const appsData = await appsResponse.json();
-      
-      if (appsData.success) {
-        setApps(appsData.data.list.map((app: any) => ({ name: app.name })));
-      }
-
     } catch (err) {
-      setError('Failed to fetch Caddy data');
-      console.error('Error fetching Caddy data:', err);
-    } finally {
-      setLoading(false);
+      console.error('Error fetching Caddy status:', err);
+    }
+  };
+
+  const fetchDomains = async () => {
+    if (!socket) return;
+    
+    try {
+      const response = await socket.emitWithAck('caddy:domains', {});
+      if (response.success) {
+        setDomains(response.data.domains || []);
+        setError(null);
+      } else {
+        setError(response.error || 'Failed to fetch domains');
+      }
+    } catch (err) {
+      console.error('Error fetching domains:', err);
+    }
+  };
+
+  const fetchApps = async () => {
+    if (!socket) return;
+    
+    try {
+      const response = await socket.emitWithAck('app:list', {});
+      if (response.success) {
+        setApps(response.data.map((app: any) => ({ name: app.name })) || []);
+      }
+    } catch (err) {
+      console.error('Error fetching apps:', err);
     }
   };
 
   const fetchConfig = async () => {
+    if (!socket) return;
+    
     try {
-      const response = await fetch('/api/caddy?action=config');
-      const data = await response.json();
-      
-      if (data.success) {
-        setConfig(data.data.config);
+      const response = await socket.emitWithAck('caddy:config', {});
+      if (response.success) {
+        setConfig(response.data.config || '');
         await validateConfig();
       }
     } catch (err) {
@@ -99,12 +113,12 @@ export default function CaddyPage() {
   };
 
   const fetchLogs = async () => {
+    if (!socket) return;
+    
     try {
-      const response = await fetch('/api/caddy?action=logs');
-      const data = await response.json();
-      
-      if (data.success) {
-        setLogs(data.data.logs);
+      const response = await socket.emitWithAck('caddy:logs', {});
+      if (response.success) {
+        setLogs(response.data.logs || '');
       }
     } catch (err) {
       console.error('Error fetching logs:', err);
@@ -112,41 +126,67 @@ export default function CaddyPage() {
   };
 
   const validateConfig = async () => {
+    if (!socket) return;
+    
     try {
-      const response = await fetch('/api/caddy?action=validate');
-      const data = await response.json();
-      
-      if (data.success) {
-        setConfigValid(data.data.valid);
+      const response = await socket.emitWithAck('caddy:validate', {});
+      if (response.success) {
+        setConfigValid(response.data.valid);
       }
     } catch (err) {
       console.error('Error validating config:', err);
     }
   };
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+  const fetchData = async () => {
+    if (!socket) return;
+    
+    try {
+      setLoading(true);
+      setError(null);
+      
+      await Promise.all([
+        fetchStatus(),
+        fetchDomains(),
+        fetchApps()
+      ]);
+    } catch (err) {
+      setError('Failed to fetch Caddy data');
+      console.error('Error fetching Caddy data:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  const executeAction = async (action: string) => {
+  useEffect(() => {
+    if (socket) {
+      fetchData();
+    }
+  }, [socket]);
+
+  // Clear success message after 5 seconds
+  useEffect(() => {
+    if (success) {
+      const timer = setTimeout(() => setSuccess(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [success]);
+
+  const executeAction = async (action: string, eventName: string, successMessage: string) => {
+    if (!socket) return;
+    
     try {
       setActionLoading(action);
+      setError(null);
       
-      const response = await fetch('/api/caddy', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ action }),
-      });
-
-      const data = await response.json();
+      const response = await socket.emitWithAck(eventName, {});
       
-      if (data.success) {
-        // Refresh status after action
+      if (response.success) {
+        setSuccess(successMessage);
+        // Refresh data after action
         setTimeout(fetchData, 1000);
       } else {
-        setError(data.error || `Failed to ${action} Caddy`);
+        setError(response.error || `Failed to ${action} Caddy`);
       }
     } catch (err) {
       setError(`Failed to ${action} Caddy`);
@@ -162,30 +202,24 @@ export default function CaddyPage() {
       return;
     }
 
+    if (!socket) return;
+
     try {
       setActionLoading('add-domain');
+      setError(null);
       
-      const response = await fetch('/api/caddy', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'add-domain',
-          appName: newDomain.appName,
-          domain: newDomain.domain,
-          isPrimary: newDomain.isPrimary
-        }),
+      const response = await socket.emitWithAck('caddy:add-domain', {
+        appName: newDomain.appName,
+        domain: newDomain.domain
       });
-
-      const data = await response.json();
       
-      if (data.success) {
+      if (response.success) {
+        setSuccess('Domain added successfully');
         setShowAddDomainModal(false);
-        setNewDomain({ appName: '', domain: '', isPrimary: false });
+        setNewDomain({ appName: '', domain: '' });
         fetchData();
       } else {
-        setError(data.error || 'Failed to add domain');
+        setError(response.error || 'Failed to add domain');
       }
     } catch (err) {
       setError('Failed to add domain');
@@ -200,19 +234,21 @@ export default function CaddyPage() {
       return;
     }
 
+    if (!socket) return;
+
     try {
       setActionLoading(`remove-${domainId}`);
+      setError(null);
       
-      const response = await fetch(`/api/caddy?domainId=${domainId}`, {
-        method: 'DELETE',
+      const response = await socket.emitWithAck('caddy:remove-domain', {
+        domainId
       });
-
-      const data = await response.json();
       
-      if (data.success) {
+      if (response.success) {
+        setSuccess('Domain removed successfully');
         fetchData();
       } else {
-        setError(data.error || 'Failed to remove domain');
+        setError(response.error || 'Failed to remove domain');
       }
     } catch (err) {
       setError('Failed to remove domain');
@@ -223,24 +259,20 @@ export default function CaddyPage() {
   };
 
   const regenerateConfig = async () => {
+    if (!socket) return;
+    
     try {
       setActionLoading('regenerate');
+      setError(null);
       
-      const response = await fetch('/api/caddy', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ action: 'update-config' }),
-      });
-
-      const data = await response.json();
+      const response = await socket.emitWithAck('caddy:regenerate', {});
       
-      if (data.success) {
+      if (response.success) {
+        setSuccess('Configuration regenerated successfully');
         fetchData();
         fetchConfig();
       } else {
-        setError(data.error || 'Failed to regenerate config');
+        setError(response.error || 'Failed to regenerate config');
       }
     } catch (err) {
       setError('Failed to regenerate config');
@@ -254,7 +286,7 @@ export default function CaddyPage() {
     return running ? 'success' : 'error';
   };
 
-  if (loading) {
+  if (loading || !socket) {
     return (
       <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
         <div className="flex items-center justify-between">
@@ -262,29 +294,10 @@ export default function CaddyPage() {
         </div>
         <div className="flex items-center justify-center h-64">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600"></div>
-          <span className="ml-2 text-gray-600 dark:text-gray-400">Loading Caddy data...</span>
+          <span className="ml-2 text-gray-600 dark:text-gray-400">
+            {!socket ? 'Connecting to server...' : 'Loading Caddy data...'}
+          </span>
         </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Caddy Management</h1>
-          <Button 
-            onClick={fetchData}
-            variant="primary"
-          >
-            Retry
-          </Button>
-        </div>
-        <Alert
-          variant="error"
-          title="Error"
-          message={error}
-        />
       </div>
     );
   }
@@ -297,144 +310,180 @@ export default function CaddyPage() {
           <Button 
             onClick={() => setShowAddDomainModal(true)}
             variant="primary"
-            disabled={!status?.running}
+            disabled={!socket || !status?.running}
+            size="sm"
           >
             <FaPlus className="mr-2" />
             Add Domain
           </Button>
           <Button 
             onClick={fetchData}
-            disabled={loading}
+            disabled={!socket}
             variant="outline"
+            size="sm"
           >
+            <FaSyncAlt className="mr-2" />
             Refresh
           </Button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Caddy Status */}
-        <ComponentCard title="Caddy Status" desc="Current Caddy server status and information">
-          {status && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <span className="text-sm text-gray-500 dark:text-gray-400">Status:</span>
-                  <Badge 
-                    color={getStatusBadgeColor(status.running)} 
-                    size="sm"
-                  >
-                    {status.running ? 'Running' : 'Stopped'}
-                  </Badge>
-                </div>
-                <div className="text-sm text-gray-500 dark:text-gray-400">
-                  Version: {status.version || 'Unknown'}
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-3 gap-3">
-                <Button
-                  onClick={() => executeAction('start')}
-                  disabled={actionLoading === 'start' || status.running}
-                  variant="primary"
-                  className="bg-green-600 hover:bg-green-700 disabled:bg-green-300"
-                  size="sm"
-                >
-                  <FaPlay className="mr-1" />
-                  {actionLoading === 'start' ? 'Starting...' : 'Start'}
-                </Button>
-                <Button
-                  onClick={() => executeAction('stop')}
-                  disabled={actionLoading === 'stop' || !status.running}
-                  variant="primary"
-                  className="bg-red-600 hover:bg-red-700 disabled:bg-red-300"
-                  size="sm"
-                >
-                  <FaStop className="mr-1" />
-                  {actionLoading === 'stop' ? 'Stopping...' : 'Stop'}
-                </Button>
-                <Button
-                  onClick={() => executeAction('reload')}
-                  disabled={actionLoading === 'reload' || !status.running}
-                  variant="primary"
-                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300"
-                  size="sm"
-                >
-                  <FaRedo className="mr-1" />
-                  {actionLoading === 'reload' ? 'Reloading...' : 'Reload'}
-                </Button>
-              </div>
-            </div>
-          )}
-        </ComponentCard>
+      {error && (
+        <Alert
+          variant="error"
+          title="Error"
+          message={error}
+        />
+      )}
 
-        {/* Configuration Status */}
-        <ComponentCard title="Configuration" desc="Caddy configuration management">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-3">
-                <span className="text-sm text-gray-500 dark:text-gray-400">Config Status:</span>
-                {configValid !== null && (
-                  <Badge 
-                    color={configValid ? 'success' : 'error'} 
-                    size="sm"
-                  >
-                    {configValid ? (
-                      <>
-                        <FaCheck className="mr-1" />
-                        Valid
-                      </>
-                    ) : (
-                      <>
-                        <FaTimes className="mr-1" />
-                        Invalid
-                      </>
-                    )}
-                  </Badge>
-                )}
-              </div>
-            </div>
-            
-            <div className="space-y-2">
-              <Button
-                onClick={() => {
-                  fetchConfig();
-                  setShowConfigModal(true);
-                }}
-                variant="outline"
-                size="sm"
-                className="w-full"
-              >
-                View Configuration
-              </Button>
-              <Button
-                onClick={regenerateConfig}
-                disabled={actionLoading === 'regenerate'}
-                variant="primary"
-                className="bg-orange-600 hover:bg-orange-700 disabled:bg-orange-300 w-full"
-                size="sm"
-              >
-                <FaRedo className="mr-1" />
-                {actionLoading === 'regenerate' ? 'Regenerating...' : 'Regenerate & Reload'}
-              </Button>
-            </div>
+      {success && (
+        <Alert
+          variant="success"
+          title="Success"
+          message={success}
+        />
+      )}
+
+      {/* Caddy Status Card */}
+      <ComponentCard title="Caddy Status" desc="Manage Caddy reverse proxy server">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
+            <Badge 
+              color={getStatusBadgeColor(status?.running || false)}
+              variant="light"
+            >
+              {status?.running ? 'Running' : 'Stopped'}
+            </Badge>
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              Reverse Proxy Server
+            </span>
           </div>
-        </ComponentCard>
-      </div>
+          
+          <div className="flex items-center space-x-2">
+            <Button
+              onClick={() => executeAction('start', 'caddy:start', 'Caddy started successfully')}
+              disabled={!socket || status?.running || actionLoading === 'start'}
+              variant="outline"
+              size="sm"
+            >
+              {actionLoading === 'start' ? (
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-600"></div>
+              ) : (
+                <FaPlay className="text-green-600" />
+              )}
+            </Button>
+            
+            <Button
+              onClick={() => executeAction('stop', 'caddy:stop', 'Caddy stopped successfully')}
+              disabled={!socket || !status?.running || actionLoading === 'stop'}
+              variant="outline"
+              size="sm"
+            >
+              {actionLoading === 'stop' ? (
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-red-600"></div>
+              ) : (
+                <FaStop className="text-red-600" />
+              )}
+            </Button>
+            
+            <Button
+              onClick={() => executeAction('reload', 'caddy:reload', 'Caddy reloaded successfully')}
+              disabled={!socket || !status?.running || actionLoading === 'reload'}
+              variant="outline"
+              size="sm"
+            >
+              {actionLoading === 'reload' ? (
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+              ) : (
+                <FaRedo className="text-blue-600" />
+              )}
+            </Button>
+          </div>
+        </div>
+      </ComponentCard>
+
+      {/* Configuration Management */}
+      <ComponentCard title="Configuration" desc="Manage Caddy configuration">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              Caddyfile Configuration
+            </span>
+            {configValid !== null && (
+              <Badge 
+                color={configValid ? 'success' : 'error'}
+                variant="light"
+                size="sm"
+              >
+                {configValid ? (
+                  <>
+                    <FaCheck className="mr-1" />
+                    Valid
+                  </>
+                ) : (
+                  <>
+                    <FaTimes className="mr-1" />
+                    Invalid
+                  </>
+                )}
+              </Badge>
+            )}
+          </div>
+          
+          <div className="flex items-center space-x-2">
+            <Button
+              onClick={() => {
+                setShowConfigModal(true);
+                fetchConfig();
+              }}
+              disabled={!socket}
+              variant="outline"
+              size="sm"
+            >
+              View Config
+            </Button>
+            
+            <Button
+              onClick={() => {
+                setShowLogsModal(true);
+                fetchLogs();
+              }}
+              disabled={!socket}
+              variant="outline"
+              size="sm"
+            >
+              View Logs
+            </Button>
+            
+            <Button
+              onClick={regenerateConfig}
+              disabled={!socket || actionLoading === 'regenerate'}
+              variant="outline"
+              size="sm"
+            >
+              {actionLoading === 'regenerate' ? (
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-brand-600"></div>
+              ) : (
+                'Regenerate'
+              )}
+            </Button>
+          </div>
+        </div>
+      </ComponentCard>
 
       {/* Domains */}
-      <ComponentCard title="Configured Domains" desc="Manage domains and SSL certificates">
+      <ComponentCard title="Domains" desc="Manage domain configurations">
         {domains.length === 0 ? (
           <div className="text-center py-8">
             <div className="text-gray-500 dark:text-gray-400 text-lg mb-2">No domains configured</div>
-            <div className="text-gray-400 dark:text-gray-500 text-sm mb-4">Add domains to enable HTTPS for your applications</div>
+            <div className="text-gray-400 dark:text-gray-500 text-sm mb-4">Add your first domain to get started</div>
             <Button 
               onClick={() => setShowAddDomainModal(true)}
+              disabled={!socket || !status?.running}
               variant="primary"
-              disabled={!status?.running}
+              size="sm"
             >
-              <FaPlus className="mr-2" />
-              Add Your First Domain
+              Add Domain
             </Button>
           </div>
         ) : (
@@ -442,45 +491,53 @@ export default function CaddyPage() {
             {domains.map((domain) => (
               <div
                 key={domain.id}
-                className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800/50"
+                className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg"
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-4">
                     <div>
-                      <div className="flex items-center space-x-2">
-                        <h3 className="text-lg font-medium text-gray-900 dark:text-white">
-                          {domain.domain}
-                        </h3>
-                        <a
-                          href={`https://${domain.domain}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300"
-                        >
-                          <FaExternalLinkAlt className="w-3 h-3" />
-                        </a>
-                      </div>
-                      <div className="flex items-center space-x-4 mt-1 text-sm text-gray-500 dark:text-gray-400">
-                        <span>App: {domain.app_name}</span>
-                        {domain.is_primary && (
-                          <Badge color="primary" size="sm">Primary</Badge>
-                        )}
+                      <h3 className="font-medium text-gray-900 dark:text-white">
+                        {domain.domain}
+                      </h3>
+                      <div className="flex items-center space-x-2 mt-1">
+                        <span className="text-sm text-gray-500 dark:text-gray-400">
+                          App: {domain.app_name}
+                        </span>
                         {domain.ssl_enabled && (
-                          <Badge color="success" size="sm">SSL</Badge>
+                          <Badge color="success" variant="light" size="sm">
+                            SSL Enabled
+                          </Badge>
+                        )}
+                        {domain.is_primary && (
+                          <Badge color="info" variant="light" size="sm">
+                            Primary
+                          </Badge>
                         )}
                       </div>
                     </div>
                   </div>
+                  
                   <div className="flex items-center space-x-2">
+                    <a
+                      href={`https://${domain.domain}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                    >
+                      <FaExternalLinkAlt />
+                    </a>
+                    
                     <Button
                       onClick={() => removeDomain(domain.id, domain.domain)}
-                      disabled={actionLoading === `remove-${domain.id}`}
-                      variant="primary"
-                      className="bg-red-600 hover:bg-red-700 disabled:bg-red-300"
+                      disabled={!socket || actionLoading === `remove-${domain.id}`}
+                      variant="outline"
                       size="sm"
                     >
-                      <FaTrash className="mr-1" />
-                      {actionLoading === `remove-${domain.id}` ? 'Removing...' : 'Remove'}
+                      {actionLoading === `remove-${domain.id}` ? (
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-red-600"></div>
+                      ) : (
+                        <FaTrash className="text-red-600" />
+                      )}
                     </Button>
                   </div>
                 </div>
@@ -490,53 +547,28 @@ export default function CaddyPage() {
         )}
       </ComponentCard>
 
-      {/* Logs */}
-      <ComponentCard title="Caddy Logs" desc="Recent Caddy server logs">
-        <div className="space-y-4">
-          <div className="flex justify-end">
-            <Button
-              onClick={fetchLogs}
-              variant="outline"
-              size="sm"
-            >
-              Refresh Logs
-            </Button>
-          </div>
-          <div className="bg-black text-green-400 font-mono text-sm p-4 rounded-lg h-64 overflow-y-auto">
-            {logs ? (
-              <pre className="whitespace-pre-wrap">{logs}</pre>
-            ) : (
-              <div className="text-gray-500">No logs available</div>
-            )}
-          </div>
-        </div>
-      </ComponentCard>
-
       {/* Add Domain Modal */}
       <Modal 
         isOpen={showAddDomainModal} 
         onClose={() => {
           setShowAddDomainModal(false);
-          setNewDomain({ appName: '', domain: '', isPrimary: false });
+          setNewDomain({ appName: '', domain: '' });
+          setError(null);
         }}
       >
-        <div className="p-6">
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Add New Domain</h2>
+        <div className="bg-white dark:bg-gray-900 p-6 rounded-lg max-w-md w-full">
+          <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-6">Add Domain</h2>
           
           <div className="space-y-4">
             <div>
-              <Label htmlFor="appName">Application</Label>
+              <Label htmlFor="app-select">Application</Label>
               <select
-                id="appName"
+                id="app-select"
                 value={newDomain.appName}
-                onChange={(e) => setNewDomain(prev => ({
-                  ...prev,
-                  appName: e.target.value
-                }))}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                required
+                onChange={(e) => setNewDomain(prev => ({ ...prev, appName: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md dark:border-gray-700 dark:bg-gray-800 dark:text-white"
               >
-                <option value="">Select an application...</option>
+                <option value="">Select an application</option>
                 {apps.map((app) => (
                   <option key={app.name} value={app.name}>
                     {app.name}
@@ -546,39 +578,23 @@ export default function CaddyPage() {
             </div>
 
             <div>
-              <Label htmlFor="domain">Domain</Label>
+              <Label htmlFor="domain-input">Domain</Label>
               <InputField
-                id="domain"
+                id="domain-input"
                 type="text"
-                placeholder="example.com"
                 defaultValue={newDomain.domain}
-                onChange={(e) => setNewDomain(prev => ({
-                  ...prev,
-                  domain: e.target.value
-                }))}
+                onChange={(e) => setNewDomain(prev => ({ ...prev, domain: e.target.value }))}
+                placeholder="example.com"
               />
-            </div>
-
-            <div className="flex items-center space-x-2">
-              <input
-                id="isPrimary"
-                type="checkbox"
-                checked={newDomain.isPrimary}
-                onChange={(e) => setNewDomain(prev => ({
-                  ...prev,
-                  isPrimary: e.target.checked
-                }))}
-                className="w-4 h-4 text-brand-600 bg-gray-100 border-gray-300 rounded focus:ring-brand-500 dark:focus:ring-brand-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
-              />
-              <Label htmlFor="isPrimary">Primary domain for this app</Label>
             </div>
           </div>
 
-          <div className="flex justify-end space-x-4 mt-6">
+          <div className="flex justify-end space-x-3 mt-6">
             <Button
               onClick={() => {
                 setShowAddDomainModal(false);
-                setNewDomain({ appName: '', domain: '', isPrimary: false });
+                setNewDomain({ appName: '', domain: '' });
+                setError(null);
               }}
               variant="outline"
               disabled={actionLoading === 'add-domain'}
@@ -587,8 +603,8 @@ export default function CaddyPage() {
             </Button>
             <Button
               onClick={addDomain}
-              disabled={actionLoading === 'add-domain' || !newDomain.appName || !newDomain.domain}
               variant="primary"
+              disabled={!socket || actionLoading === 'add-domain' || !newDomain.appName || !newDomain.domain}
             >
               {actionLoading === 'add-domain' ? 'Adding...' : 'Add Domain'}
             </Button>
@@ -601,42 +617,73 @@ export default function CaddyPage() {
         isOpen={showConfigModal} 
         onClose={() => setShowConfigModal(false)}
         isFullscreen={true}
+        showCloseButton={false}
       >
-        <div className="min-h-screen bg-white dark:bg-gray-900 p-8">
-          <div className="max-w-6xl mx-auto">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-3xl font-bold text-gray-900 dark:text-white">Caddy Configuration</h2>
-              <div className="flex items-center space-x-4">
-                {configValid !== null && (
-                  <Badge 
-                    color={configValid ? 'success' : 'error'} 
-                    size="md"
-                  >
-                    {configValid ? (
-                      <>
-                        <FaCheck className="mr-1" />
-                        Valid Configuration
-                      </>
-                    ) : (
-                      <>
-                        <FaTimes className="mr-1" />
-                        Invalid Configuration
-                      </>
-                    )}
-                  </Badge>
-                )}
-                <Button
-                  onClick={() => setShowConfigModal(false)}
-                  variant="outline"
+        <div className="bg-white dark:bg-gray-900 p-6 h-full">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-bold text-gray-900 dark:text-white">Caddy Configuration</h2>
+            <div className="flex items-center space-x-3">
+              {configValid !== null && (
+                <Badge 
+                  color={configValid ? 'success' : 'error'}
+                  variant="light"
                 >
-                  Close
-                </Button>
-              </div>
+                  {configValid ? 'Valid Configuration' : 'Invalid Configuration'}
+                </Badge>
+              )}
+              <Button
+                onClick={() => setShowConfigModal(false)}
+                variant="outline"
+                size="sm"
+              >
+                Close
+              </Button>
             </div>
-            
-            <div className="bg-black text-gray-300 font-mono text-sm p-6 rounded-lg h-[calc(100vh-200px)] overflow-y-auto">
-              <pre className="whitespace-pre-wrap">{config || 'Loading configuration...'}</pre>
+          </div>
+          
+          <div className="bg-gray-900 dark:bg-gray-950 rounded border border-gray-600 dark:border-gray-700 h-96 overflow-y-auto">
+            <pre className="p-4 text-sm text-gray-100 dark:text-gray-200 font-mono whitespace-pre-wrap">
+              {config || 'No configuration available'}
+            </pre>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Logs Modal */}
+      <Modal 
+        isOpen={showLogsModal} 
+        showCloseButton={false}
+        className="w-full h-full"
+        onClose={() => setShowLogsModal(false)}
+        isFullscreen={true}
+      >
+        <div className="bg-white dark:bg-gray-900 p-6 h-full">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-bold text-gray-900 dark:text-white">Caddy Logs</h2>
+            <div className="flex items-center space-x-3">
+              <Button
+                onClick={fetchLogs}
+                disabled={!socket}
+                variant="outline"
+                size="sm"
+              >
+                <FaSyncAlt className="mr-2" />
+                Refresh
+              </Button>
+              <Button
+                onClick={() => setShowLogsModal(false)}
+                variant="outline"
+                size="sm"
+              >
+                Close
+              </Button>
             </div>
+          </div>
+          
+          <div className="bg-gray-900 dark:bg-gray-950 rounded border border-gray-600 dark:border-gray-700 h-96 overflow-y-auto">
+            <pre className="p-4 text-sm text-gray-100 dark:text-gray-200 font-mono whitespace-pre-wrap">
+              {logs || 'No logs available'}
+            </pre>
           </div>
         </div>
       </Modal>

@@ -10,31 +10,46 @@ import {
 import Badge from "../ui/badge/Badge";
 import { getIcon } from "@/lib/icons";
 import { useEffect, useState } from "react";
-import { PM2Process } from "@/lib/pm2";
 import { LuRefreshCcw } from "react-icons/lu";
-
+import { useSocketContext } from "@/context/SocketContext";
+import { App, ServiceStatus } from "@/lib/models";
 
 export default function Apps() {
 
-  const [apps, setApps] = useState<PM2Process[]>();
+  const [apps, setApps] = useState<App[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const { socket } = useSocketContext();
 
   const fetchApps = async () => {
-      try {
-        const response = await fetch('/api/pm2?action=list');
-        if (!response.ok) {
-          throw new Error('Failed to fetch apps');
-        }
-        const data = await response.json();
-        setApps(data.data || []);
-        console.log('Fetched apps:', data.data.processes);
-      } catch (error) {
-        console.error('Error fetching apps:', error);
+    if (!socket) return;
+    
+    try {
+      setLoading(true);
+      const response = await socket.emitWithAck('app:list', {});
+      
+      if (response.success) {
+        const appsData = response.data?.apps || [];
+        setApps(appsData);
+        setError(null);
+        console.log('Fetched apps:', appsData);
+      } else {
+        setError(response.error || 'Failed to fetch apps');
+        console.error('Error fetching apps:', response.error);
       }
-    };
+    } catch (error) {
+      setError('Failed to fetch applications');
+      console.error('Error fetching apps:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
+    if (!socket) return;
+    
     fetchApps();
-  }, []);
+  }, [socket]);
 
   return (
     <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white px-4 pb-3 pt-4 dark:border-gray-800 dark:bg-white/[0.03] sm:px-6">
@@ -46,8 +61,12 @@ export default function Apps() {
         </div>
 
         <div className="flex items-center gap-3">
-          <button onClick={fetchApps} className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-theme-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 hover:text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.03] dark:hover:text-gray-200">
-            <LuRefreshCcw className="h-4 w-4" />
+          <button 
+            onClick={fetchApps} 
+            disabled={loading || !socket}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-theme-sm font-medium text-gray-700 shadow-theme-xs hover:bg-gray-50 hover:text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.03] dark:hover:text-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <LuRefreshCcw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
         </div>
@@ -67,19 +86,13 @@ export default function Apps() {
                 isHeader
                 className="py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400"
               >
-                Uptime
+                Repository
               </TableCell>
               <TableCell
                 isHeader
                 className="py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400"
               >
-                CPU Usage
-              </TableCell>
-              <TableCell
-                isHeader
-                className="py-3 font-medium text-gray-500 text-start text-theme-xs dark:text-gray-400"
-              >
-                Memory Usage
+                Runtime
               </TableCell>
               <TableCell
                 isHeader
@@ -93,59 +106,77 @@ export default function Apps() {
           {/* Table Body */}
 
           <TableBody className="divide-y divide-gray-100 dark:divide-gray-800">
-            {apps && apps.length === 0 && (
+            {error && (
+              <TableRow>
+                <TableCell className="text-center py-6">
+                  <p className="text-red-500 dark:text-red-400">
+                    Error: {error}
+                  </p>
+                </TableCell>
+                <TableCell> </TableCell>
+                <TableCell> </TableCell>
+                <TableCell> </TableCell>
+              </TableRow>
+            )}
+            {!error && loading && (
+              <TableRow>
+                <TableCell className="text-center py-6">
+                  <p className="text-gray-500 dark:text-gray-400">
+                    Loading applications...
+                  </p>
+                </TableCell>
+                <TableCell> </TableCell>
+                <TableCell> </TableCell>
+                <TableCell> </TableCell>
+              </TableRow>
+            )}
+            {!error && !loading && apps && apps.length === 0 && (
               <TableRow>
                 <TableCell className="text-center py-6">
                   <p className="text-gray-500 dark:text-gray-400">
                     No applications found.
                   </p>
                 </TableCell>
+                <TableCell> </TableCell>
+                <TableCell> </TableCell>
+                <TableCell> </TableCell>
               </TableRow>
             )}
-            {apps && apps.map((app) => (
-              <TableRow key={app.pm_id} className="">
-                <TableCell className="py-3">
-                  <div className="flex items-center gap-3">
-                    <div className="h-[50px] w-[50px] overflow-hidden rounded-md flex items-center justify-center">
-                      {getIcon(app.name.toLowerCase())}
+            {!error && !loading && apps && apps.map((app) => {
+              return (
+                <TableRow key={app.id} className="">
+                  <TableCell className="py-3">
+                    <div className="flex items-center gap-3">
+                      <div className="h-[50px] w-[50px] overflow-hidden rounded-md flex items-center justify-center">
+                        {getIcon(app.name.toLowerCase())}
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-800 text-theme-sm dark:text-white/90">
+                          {app.name}
+                        </p>
+                        <span className="text-gray-500 text-theme-xs dark:text-gray-400">
+                          ID: {app.id}
+                        </span>
+                      </div>
                     </div>
-                    <div>
-                      <p className="font-medium text-gray-800 text-theme-sm dark:text-white/90">
-                        {app.name}
-                      </p>
-                      <span className="text-gray-500 text-theme-xs dark:text-gray-400">
-                        {app.pid}
-                      </span>
-                    </div>
-                  </div>
-                </TableCell>
-                <TableCell className="py-3 text-gray-500 text-theme-sm dark:text-gray-400">
-                  {app.uptime}
-                </TableCell>
-                <TableCell className="py-3 text-gray-500 text-theme-sm dark:text-gray-400">
-                  {app.cpu}
-                </TableCell>
-                <TableCell className="py-3 text-gray-500 text-theme-sm dark:text-gray-400">
-                  {app.memory}
-                </TableCell>
-                <TableCell className="py-3 text-gray-500 text-theme-sm dark:text-gray-400">
-                  <Badge
-                    size="sm"
-                    color={
-                      app.status === "Running"
-                        ? "success"
-                        : app.status === "Building"
-                        ? "warning"
-                        : app.status === "Stopped"
-                        ? "info"
-                        : "error"
-                    }
-                  >
-                    {app.status}
-                  </Badge>
-                </TableCell>
-              </TableRow>
-            ))}
+                  </TableCell>
+                  <TableCell className="py-3 text-gray-500 text-theme-sm dark:text-gray-400">
+                    {app.repository_url || 'No repository'}
+                  </TableCell>
+                  <TableCell className="py-3 text-gray-500 text-theme-sm dark:text-gray-400">
+                    {app.runtime || 'Unknown'}
+                  </TableCell>
+                  <TableCell className="py-3 text-gray-500 text-theme-sm dark:text-gray-400">
+                    <Badge
+                      size="sm"
+                      color="info"
+                    >
+                      View Details
+                    </Badge>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </div>

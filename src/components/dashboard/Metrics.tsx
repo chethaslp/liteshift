@@ -5,35 +5,39 @@ import { LuMemoryStick, LuCpu, LuLoaderCircle, LuClock } from "react-icons/lu";
 import { IoIosWarning } from "react-icons/io";
 import { FaRegFloppyDisk } from "react-icons/fa6";
 import { formatTime } from "@/lib/utils";
+import { useSocketContext } from "@/context/SocketContext";
 
 
 export const Metrics = () => {
   const [data, setData] = React.useState<SystemAnalyticsResponse>();
+  const { socket } = useSocketContext();
 
   useEffect(() => {
-    const fetchData = () => fetch("/api/system")
-      .then((response) => response.json())
-      .then((data) => {
-        setData(data);
-      })
-      .catch((error) => {
-        console.error("Error fetching dashboard data:", error);
+    if (!socket) return;
+    socket.emitWithAck("system:stream-analytics", {interval: 1000}).then((response: {success : boolean, message: string}) => {
+      if (response.success) {
+        console.log("System analytics data fetched successfully");
+      }else{  
+        console.error("Failed to fetch system analytics data");
+      }
+    });
+
+    socket.on("system:analytics-stream", (response: SystemAnalyticsResponse) => {
+      setData(response);
+    });
+    
+    return () => {
+      socket.off("system:analytics-stream");
+      
+      socket.emitWithAck("system:stop-stream", {}).then((response: {success : boolean, message: string}) => {
+        if (response.success) {
+          console.log("Stopped system analytics stream successfully");
+        } else {
+          console.error("Failed to stop system analytics stream");
+        }
       });
-
-      fetchData(); // Initial fetch
-      setInterval(() => fetchData(), 5000); // Fetch data every 5 seconds
-    }, []);
-
-  useEffect(() => {
-
-    // Updating the uptime every second for improving UX
-    const interval = setInterval(() => {
-      if (!data) return;
-      setData({ ...data, uptime: data.uptime + 1 });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [data]);
+    }
+  }, [socket]);
 
     return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:gap-6">

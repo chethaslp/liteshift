@@ -12,19 +12,8 @@ import Label from "@/components/form/Label";
 import TextArea from "@/components/form/input/TextArea";
 import Select from "@/components/form/Select";
 import DeploymentQueue from "@/components/dashboard/DeploymentQueue";
-
-interface App {
-  pm_id: number;
-  name: string;
-  status: string;
-  pid?: number;
-  cpu: number;
-  memory: number;
-  uptime: number;
-  restarts: number;
-  unstable_restarts: number;
-  created_at: number;
-}
+import { useSocketContext } from "@/context/SocketContext";
+import { App } from "@/lib/models";
 
 export default function AppsPage() {
   const [apps, setApps] = useState<App[]>([]);
@@ -40,12 +29,14 @@ export default function AppsPage() {
   const [branches, setBranches] = useState<string[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const router = useRouter();
+  const { socket } = useSocketContext();
 
   // Form state for deployment
   const [formData, setFormData] = useState({
     appName: '',
     repository: '',
     branch: 'main',
+    runtime: 'node' as 'node' | 'python' | 'bun',
     buildCommand: '',
     installCommand: 'npm install',
     startCommand: '',
@@ -53,15 +44,20 @@ export default function AppsPage() {
   });
 
   const fetchApps = async () => {
+    if (!socket) return;
+    
     try {
       setLoading(true);
-      const response = await fetch('/api/pm2?action=list');
-      const data = await response.json();
+      setError(null);
       
-      if (data.success) {
-        setApps(data.data);
+      // Fetch apps from database
+      const appsResponse = await socket.emitWithAck('app:list', {});
+      
+      if (appsResponse.success) {
+        const appList = appsResponse.data || [];
+        setApps(appList);
       } else {
-        setError(data.error || 'Failed to fetch apps');
+        setError(appsResponse.error || 'Failed to fetch apps');
       }
     } catch (err) {
       setError('Failed to fetch apps');
@@ -72,8 +68,10 @@ export default function AppsPage() {
   };
 
   useEffect(() => {
-    fetchApps();
-  }, []);
+    if (socket) {
+      fetchApps();
+    }
+  }, [socket]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -186,9 +184,30 @@ export default function AppsPage() {
     }));
   };
 
+  const handleRuntimeChange = (value: string) => {
+    const runtime = value as 'node' | 'python' | 'bun';
+    
+    // Update default install command based on runtime
+    const defaultInstallCommand = 
+      runtime === 'python' ? 'pip install -r requirements.txt' :
+      runtime === 'bun' ? 'bun install' :
+      'npm install';
+    
+    setFormData(prev => ({
+      ...prev,
+      runtime,
+      installCommand: defaultInstallCommand
+    }));
+  };
+
   const handleCreateApp = async () => {
     if (!formData.appName || !formData.repository || !formData.startCommand) {
       setDeploymentError('App name, repository, and start command are required');
+      return;
+    }
+
+    if (!socket) {
+      setDeploymentError('Socket connection not available');
       return;
     }
 
@@ -213,33 +232,25 @@ export default function AppsPage() {
         }
       }
 
-      const response = await fetch('/api/manager', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'deploy-git',
-          appName: formData.appName,
-          repository: formData.repository,
-          branch: formData.branch || 'main',
-          buildCommand: formData.buildCommand || undefined,
-          installCommand: formData.installCommand || 'npm install',
-          startCommand: formData.startCommand,
-          envVars
-        }),
+      const response = await socket.emitWithAck('deploy:from-git', {
+        appName: formData.appName,
+        repository: formData.repository,
+        branch: formData.branch || 'main',
+        runtime: formData.runtime,
+        buildCommand: formData.buildCommand || undefined,
+        installCommand: formData.installCommand || 'npm install',
+        startCommand: formData.startCommand,
+        envVars
       });
 
-      const data = await response.json();
-
-      if (data.success) {
-        const queueInfo = data.data;
+      if (response.success) {
+        const queueInfo = response.data;
         setQueueId(queueInfo.queueId);
         setDeploymentSuccess(`${queueInfo.message} - You can track the deployment progress below.`);
 
-        location.href = `/deployments`;
+        router.push(`/deployments`);
       } else {
-        setDeploymentError(data.error || 'Failed to queue deployment');
+        setDeploymentError(response.error || 'Failed to queue deployment');
       }
     } catch (err) {
       setDeploymentError('Failed to deploy application');
@@ -249,52 +260,18 @@ export default function AppsPage() {
     }
   };
 
-  const formatMemory = (bytes: number) => {
-    const mb = bytes / 1024 / 1024;
-    return `${mb.toFixed(1)} MB`;
-  };
-
-  const formatUptime = (ms: number) => {
-    if (!ms) return '0s';
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
-
-    if (days > 0) return `${days}d ${hours % 24}h`;
-    if (hours > 0) return `${hours}h ${minutes % 60}m`;
-    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-    return `${seconds}s`;
-  };
-
-  const getStatusBadgeColor = (status: string) => {
-    switch (status) {
-      case 'online':
-        return 'success';
-      case 'stopped':
-        return 'error';
-      case 'stopping':
-      case 'starting':
-        return 'warning';
-      case 'errored':
-        return 'error';
-      default:
-        return 'light';
-    }
-  };
-
   const handleAppClick = (appName: string) => {
     router.push(`/apps/${encodeURIComponent(appName)}`);
   };
 
-  if (loading) {
+  if (loading || !socket) {
     return (
       <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Applications</h1>
           <Button 
             onClick={fetchApps}
-            disabled={loading}
+            disabled={loading || !socket}
             variant="primary"
           >
             Refresh
@@ -302,7 +279,9 @@ export default function AppsPage() {
         </div>
         <div className="flex items-center justify-center h-64">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-600"></div>
-          <span className="ml-2 text-gray-600 dark:text-gray-400">Loading applications...</span>
+          <span className="ml-2 text-gray-600 dark:text-gray-400">
+            {!socket ? 'Connecting to server...' : 'Loading applications...'}
+          </span>
         </div>
       </div>
     );
@@ -336,13 +315,14 @@ export default function AppsPage() {
         <div className="flex items-center space-x-3">
           <Button 
             onClick={() => setShowCreateModal(true)}
+            disabled={!socket}
             variant="primary"
           >
             + Create App
           </Button>
           <Button 
             onClick={fetchApps}
-            disabled={loading}
+            disabled={loading || !socket}
             variant="outline"
           >
             Refresh
@@ -355,6 +335,7 @@ export default function AppsPage() {
           <div className="text-gray-400 dark:text-gray-500 text-sm mb-4">Deploy your first application to get started</div>
           <Button 
             onClick={() => setShowCreateModal(true)}
+            disabled={!socket}
             variant="primary"
           >
             Create Your First App
@@ -363,58 +344,49 @@ export default function AppsPage() {
       ) : (
         <ComponentCard title="Running Applications" desc="Manage your deployed applications">
           <div className="space-y-4">
-            {apps.map((app) => (
-              <div
-                key={app.pm_id}
-                onClick={() => handleAppClick(app.name)}
-                className="p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition-colors duration-150 rounded-lg border border-gray-200 dark:border-gray-700"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-4">
-                    <div className="flex-shrink-0">
-                      <div className="h-10 w-10 rounded-lg bg-brand-100 dark:bg-brand-900/50 flex items-center justify-center">
-                        <span className="text-brand-600 dark:text-brand-400 font-semibold text-sm">
-                          {app.name.charAt(0).toUpperCase()}
-                        </span>
+            {apps.map((app) => {
+              return (
+                <div
+                  key={app.id}
+                  onClick={() => handleAppClick(app.name)}
+                  className="p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition-colors duration-150 rounded-lg border border-gray-200 dark:border-gray-700"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-4">
+                      <div className="flex-shrink-0">
+                        <div className="h-10 w-10 rounded-lg bg-brand-100 dark:bg-brand-900/50 flex items-center justify-center">
+                          <span className="text-brand-600 dark:text-brand-400 font-semibold text-sm">
+                            {app.name.charAt(0).toUpperCase()}
+                          </span>
+                        </div>
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-medium text-gray-900 dark:text-white">{app.name}</h3>
+                        <div className="flex items-center space-x-4 mt-1 text-sm text-gray-500 dark:text-gray-400">
+                          <span>ID: {app.id}</span>
+                          {app.repository_url && (
+                            <span>Repository: {app.repository_url.replace("https://","")}:<span className="font-bold">{app.branch}</span></span>
+                          )}
+                        </div>
                       </div>
                     </div>
-                    <div>
-                      <h3 className="text-lg font-medium text-gray-900 dark:text-white">{app.name}</h3>
-                      <div className="flex items-center space-x-4 mt-1 text-sm text-gray-500 dark:text-gray-400">
-                        <span>ID: {app.pm_id}</span>
-                        {app.pid && <span>PID: {app.pid}</span>}
-                        <span>Restarts: {app.restarts}</span>
-                        <span>Uptime: {formatUptime(app.uptime)}</span>
+                    <div className="flex items-center space-x-4">
+                      <div className="text-right">
+                        <div className="text-sm text-gray-500 dark:text-gray-400">Runtime</div>
+                        <div className="text-sm font-medium text-gray-900 dark:text-white uppercase">
+                          {app.runtime}
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center space-x-4">
-                    <div className="text-right">
-                      <div className="text-sm text-gray-500 dark:text-gray-400">CPU</div>
-                      <div className="text-sm font-medium text-gray-900 dark:text-white">{app.cpu.toFixed(1)}%</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm text-gray-500 dark:text-gray-400">Memory</div>
-                      <div className="text-sm font-medium text-gray-900 dark:text-white">{formatMemory(app.memory)}</div>
-                    </div>
-                    <div>
-                      <Badge 
-                        color={getStatusBadgeColor(app.status)}
-                        variant="light"
-                        size="sm"
-                      >
-                        {app.status}
-                      </Badge>
-                    </div>
-                    <div className="text-gray-400 dark:text-gray-500">
-                      <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                      </svg>
+                      <div className="text-gray-400 dark:text-gray-500">
+                        <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </ComponentCard>
       )}
@@ -521,13 +493,30 @@ export default function AppsPage() {
                 </div>
 
                 <div>
+                  <Label htmlFor="runtime">Runtime Environment</Label>
+                  <Select
+                    options={[
+                      { value: 'node', label: 'Node.js' },
+                      { value: 'python', label: 'Python' },
+                      { value: 'bun', label: 'Bun' }
+                    ]}
+                    placeholder="Select runtime"
+                    onChange={handleRuntimeChange}
+                    defaultValue={formData.runtime}
+                  />
+                </div>
+
+                <div>
                   <Label htmlFor="startCommand">Start Command</Label>
                   <InputField
                     id="startCommand"
                     name="startCommand"
                     type="text"
-                    placeholder="npm start"
-                    defaultValue={formData.startCommand}
+                    defaultValue={
+                      formData.runtime === 'python' ? 'python app.py' :
+                      formData.runtime === 'bun' ? 'bun start' :
+                      'npm start'
+                    }
                     onChange={handleInputChange}
                   />
                 </div>
@@ -541,8 +530,14 @@ export default function AppsPage() {
                     id="installCommand"
                     name="installCommand"
                     type="text"
-                    placeholder="npm install"
-                    defaultValue={formData.installCommand}
+                    placeholder={
+                      formData.runtime === 'python' ? 'pip install -r requirements.txt' :
+                      "/root/.bun/bin/bun install"
+                    }
+                    defaultValue={
+                      formData.runtime === 'python' ? 'pip install -r requirements.txt' :
+                      "/root/.bun/bin/bun install"
+                    }
                     onChange={handleInputChange}
                   />
                 </div>
@@ -553,7 +548,11 @@ export default function AppsPage() {
                     id="buildCommand"
                     name="buildCommand"
                     type="text"
-                    placeholder="npm run build"
+                    placeholder={
+                      formData.runtime === 'python' ? 'python -m build' :
+                      formData.runtime === 'bun' ? 'bun run build' :
+                      'npm run build'
+                    }
                     defaultValue={formData.buildCommand}
                     onChange={handleInputChange}
                   />
@@ -596,7 +595,7 @@ PORT=3000`}
               <Button
                 onClick={handleCreateApp}
                 variant="primary"
-                disabled={deploymentLoading || !formData.appName || !formData.repository || !formData.startCommand}
+                disabled={deploymentLoading || !socket || !formData.appName || !formData.repository || !formData.startCommand}
                 size="md"
               >
                 {deploymentLoading ? 'Deploying...' : 'Deploy Application'}

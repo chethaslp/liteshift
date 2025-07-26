@@ -5,6 +5,7 @@ import ComponentCard from '@/components/common/ComponentCard';
 import Badge from '@/components/ui/badge/Badge';
 import { FaFile, FaGithub } from 'react-icons/fa6';
 import Link from 'next/link';
+import { useSocketContext } from '@/context/SocketContext';
 
 interface QueueItem {
   id: number;
@@ -18,24 +19,24 @@ interface QueueItem {
   error_message?: string;
 }
 
-interface DeploymentQueueProps {
-  refreshInterval?: number;
-}
 
-export default function DeploymentQueue({ refreshInterval = 1000 }: DeploymentQueueProps) {
+export default function DeploymentQueue() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedLogs, setExpandedLogs] = useState<Set<number>>(new Set());
+  const [streamingLogs, setStreamingLogs] = useState<Set<number>>(new Set());
   const logsEndRef = useRef<{ [key: number]: HTMLDivElement | null }>({});
+  const { socket } = useSocketContext();
 
   const fetchQueue = async () => {
+    if (!socket) return;
+    
     try {
-      const response = await fetch('/api/deployment-queue');
-      const data = await response.json();
+      const response = await socket.emitWithAck("deploy:queue-status", {});
       
-      if (data.success) {
-        const newQueue = data.data.queue;
+      if (response.success) {
+        const newQueue = response.data;
         setQueue(newQueue);
         
         // Auto-expand logs for building deployments
@@ -49,9 +50,16 @@ export default function DeploymentQueue({ refreshInterval = 1000 }: DeploymentQu
           return newSet;
         });
         
+        // Start streaming logs for building deployments
+        newQueue.forEach((item: QueueItem) => {
+          if (item.status === 'building' && !streamingLogs.has(item.id)) {
+            startLogStreaming(item.id);
+          }
+        });
+        
         setError(null);
       } else {
-        setError(data.error || 'Failed to fetch queue');
+        setError(response.error || 'Failed to fetch queue');
       }
     } catch (err) {
       setError('Failed to fetch deployment queue');
@@ -61,29 +69,111 @@ export default function DeploymentQueue({ refreshInterval = 1000 }: DeploymentQu
     }
   };
 
+  const startLogStreaming = async (queueId: number) => {
+    if (!socket || streamingLogs.has(queueId)) return;
+    
+    try {
+      const response = await socket.emitWithAck("deploy:stream-logs", { queueId });
+      if (response.success) {
+        setStreamingLogs(prev => new Set(prev).add(queueId));
+      }
+    } catch (err) {
+      console.error('Error starting log stream:', err);
+    }
+  };
+
+  const stopLogStreaming = async (queueId: number) => {
+    if (!socket || !streamingLogs.has(queueId)) return;
+    
+    try {
+      const response = await socket.emitWithAck("deploy:stop-stream", { queueId });
+      if (response.success) {
+        setStreamingLogs(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(queueId);
+          return newSet;
+        });
+      }
+    } catch (err) {
+      console.error('Error stopping log stream:', err);
+    }
+  };
+
   useEffect(() => {
+    if (!socket) return;
+
     fetchQueue();
     
-    const interval = setInterval(fetchQueue, refreshInterval);
-    return () => clearInterval(interval);
-  }, [refreshInterval]);
+    // Set up socket event listeners
+    socket.on("deploy:log-stream", (data: { queueId: number; status: string; logs: string; timestamp: string }) => {
+      setQueue(prev => 
+        prev.map(item => 
+          item.id === data.queueId 
+            ? { ...item, logs: data.logs, status: data.status }
+            : item
+        )
+      );
+    });
+
+    socket.on("deploy:log-stream-end", (data: { queueId: number; finalStatus: string }) => {
+      setQueue(prev => 
+        prev.map(item => 
+          item.id === data.queueId 
+            ? { ...item, status: data.finalStatus }
+            : item
+        )
+      );
+      
+      // Stop streaming for completed deployments
+      setStreamingLogs(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(data.queueId);
+        return newSet;
+      });
+    });
+    
+    
+    return () => {
+
+      // Clean up socket listeners
+      socket.off("deploy:log-stream");
+      socket.off("deploy:log-stream-end");
+      
+      // Stop all active log streams - use current state
+      setStreamingLogs(currentStreaming => {
+        currentStreaming.forEach(queueId => {
+          socket.emitWithAck("deploy:stop-stream", { queueId }).catch(err => 
+            console.error('Error stopping log stream during cleanup:', err)
+          );
+        });
+        return new Set();
+      });
+    };
+  }, [socket]);
 
   // Auto-scroll to bottom of logs when they update
   useEffect(() => {
     queue.forEach((item) => {
       if (expandedLogs.has(item.id) && logsEndRef.current[item.id] && item.status === 'building') {
-        logsEndRef.current[item.id]?.scrollIntoView({ behavior: 'smooth' });
+        // logsEndRef.current[item.id]?.scrollIntoView({ behavior: 'smooth' });
       }
     });
   }, [queue, expandedLogs]);
 
-  const toggleLogs = (id: number) => {
+  const toggleLogs = async (id: number) => {
     setExpandedLogs(prev => {
       const newSet = new Set(prev);
       if (newSet.has(id)) {
         newSet.delete(id);
+        // Stop streaming when logs are collapsed
+        stopLogStreaming(id);
       } else {
         newSet.add(id);
+        // Start streaming when logs are expanded for building deployments
+        const item = queue.find(q => q.id === id);
+        if (item && item.status === 'building') {
+          startLogStreaming(id);
+        }
       }
       return newSet;
     });
@@ -163,9 +253,12 @@ export default function DeploymentQueue({ refreshInterval = 1000 }: DeploymentQu
                 {(item.status === 'building' || item.status === 'failed') && item.logs && (
                   <button
                     onClick={() => toggleLogs(item.id)}
-                    className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                    className="text-sm text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
                   >
                     {expandedLogs.has(item.id) ? 'Hide Logs' : 'Show Logs'}
+                    {streamingLogs.has(item.id) && (
+                      <div className="animate-pulse h-2 w-2 bg-green-400 rounded-full"></div>
+                    )}
                   </button>
                 )}
               </div>
@@ -201,10 +294,10 @@ export default function DeploymentQueue({ refreshInterval = 1000 }: DeploymentQu
                 <div className={`px-3 py-2 ${item.status == "failed" ? "bg-red-600" : "bg-gray-800 dark:bg-gray-900"} border-b border-gray-600 dark:border-gray-700 rounded-t`}>
                   <div className={`flex items-center justify-between`}>
                     <span className="text-sm font-medium text-gray-200 dark:text-gray-300">
-                      Build Logs {item.status === 'building' && (
+                      Build Logs {(item.status === 'building' && streamingLogs.has(item.id)) && (
                         <span className="ml-2 inline-flex items-center">
                           <div className="animate-pulse h-2 w-2 bg-green-400 rounded-full mr-1"></div>
-                          <span className="text-xs text-green-400">Live</span>
+                          <span className="text-xs text-green-400">Streaming</span>
                         </span>
                       )}
                     </span>
