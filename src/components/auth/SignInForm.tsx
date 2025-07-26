@@ -7,7 +7,7 @@ import { ThemeProvider } from "@/context/ThemeContext";
 import { EyeCloseIcon, EyeIcon } from "@/icons";
 import Link from "next/link";
 import Image from "next/image";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import GridShape from "../common/GridShape";
 import ThemeTogglerTwo from "../common/ThemeTogglerTwo";
 import { IoIosWarning, IoMdWarning } from "react-icons/io";
@@ -17,7 +17,14 @@ export default function SignInForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [isChecked, setIsChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [host, setHost] = useState<string | null>(null);
   const { setCreds } = useSocketContext();
+
+  useEffect(() => {
+    if(localStorage.getItem("host") !== undefined && localStorage.getItem("host") !== "") {
+      setHost(localStorage.getItem("host"));
+    }
+  }, []);
 
   // Placeholder for form submission logic
   const handleSubmit = (e: React.FormEvent) => {
@@ -67,7 +74,7 @@ export default function SignInForm() {
                   <Label>
                     Host <span className="text-error-500">*</span>{" "}
                   </Label>
-                  <Input placeholder="183.165.215.2" type="text" name="host"  defaultValue={localStorage.getItem("host") || ""}/>
+                  <Input placeholder="183.165.215.2" type="text" name="host"  defaultValue={host || ""}/>
                 </div>
                 <div>
                   <Label>
