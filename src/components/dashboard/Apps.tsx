@@ -29,7 +29,7 @@ export default function Apps() {
       const response = await socket.emitWithAck('app:list', {});
       
       if (response.success) {
-        const appsData = response.data?.apps || [];
+        const appsData = response.data || [];
         setApps(appsData);
         setError(null);
         console.log('Fetched apps:', appsData);

@@ -2,7 +2,7 @@
 import React, { useEffect } from 'react';
 import { io, Socket } from "socket.io-client";
 import Image from 'next/image';
-import { Credential, User } from '@/lib/models';
+import { Credential, SystemInfo, User } from '@/lib/models';
 import { useRouter } from 'next/navigation';
 import SignInForm from '@/components/auth/SignInForm';
 import Loading from '@/components/common/Loading';
@@ -11,8 +11,9 @@ export const SocketContext = React.createContext<SocketContextProps>({ setCreds:
 
 interface SocketContextProps {
     user?: User;
-    socket?: Socket
-    setCreds : React.Dispatch<React.SetStateAction<Credential | undefined>>
+    socket?: Socket;
+    systemInfo?: SystemInfo;
+    setCreds : React.Dispatch<React.SetStateAction<Credential | undefined>>;
 }   
 
 export const useSocketContext = () => React.useContext(SocketContext);
@@ -21,6 +22,7 @@ export const SocketContextProvider = ({ children }: { children: React.ReactNode}
 
     const [socket, setSocket] = React.useState<Socket>();
     const [user, setUser] = React.useState<User>();
+    const [systemInfo, setSystemInfo] = React.useState<SystemInfo>();
     const [loading, setLoading] = React.useState<'connecting' | 'reconnecting' | 'connected' | 'disconnected'>();
     const [creds, setCreds] = React.useState<Credential>();
     const router = useRouter();
@@ -59,6 +61,20 @@ export const SocketContextProvider = ({ children }: { children: React.ReactNode}
         socket.on("connect", () => {
             setLoading("connected");
             console.log("Connected to server!");
+
+            socket.emitWithAck('handshake', {}).then((response: { success: boolean, user?: User, systemInfo?: SystemInfo }) => {
+                console.log('Handshake response:', response);
+                if (response.success) {
+                    setUser(response.user);
+                    setSystemInfo(response.systemInfo);
+                } else {
+                    console.error('Handshake failed:', response);
+                    alert('Failed to authenticate. Please check your credentials.');
+                    // setCreds(undefined);
+                }
+            }
+
+            )
         });
 
         socket.on("reconnect", () => {
@@ -92,7 +108,7 @@ export const SocketContextProvider = ({ children }: { children: React.ReactNode}
     }, [socket])
 
     return (
-        <SocketContext.Provider value={{ user, socket, setCreds } }>
+        <SocketContext.Provider value={{ user, socket, setCreds, systemInfo } }>
             <div className="h-[100dvh] w-screen m-0 p-0">
                 <Loading 
                     message={loading === "reconnecting" ? "Reconnecting..." : "Connecting to server..."} 

@@ -5,6 +5,12 @@ export interface Credential {
     host: string;
 }
 
+export interface SystemInfo { 
+    paths: { [key: string]: string }, 
+    version: string, 
+    host: string 
+}
+
 
 /**
  * User model representing the users table
@@ -31,6 +37,7 @@ export interface App {
     install_command: string;
     start_command: string;
     runtime: 'node' | 'python' | 'bun';
+    port: number;
     created_at: string; // ISO date string
     updated_at: string; // ISO date string
 }

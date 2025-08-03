@@ -9,6 +9,17 @@ import Alert from "@/components/ui/alert/Alert";
 import { IoMdArrowBack } from "react-icons/io";
 import { useSocketContext } from "@/context/SocketContext";
 import { App as AppDetails, ServiceStatus } from "@/lib/models";
+import { Modal } from "@/components/ui/modal";
+import InputField from "@/components/form/input/InputField";
+import Label from "@/components/form/Label";
+
+interface EnvVar {
+  id: number;
+  app_id: number;
+  key: string;
+  value: string;
+  created_at: string;
+}
 
 export default function AppDetailPage() {
   const router = useRouter();
@@ -23,6 +34,13 @@ export default function AppDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  
+  // Environment variables state
+  const [envVars, setEnvVars] = useState<EnvVar[]>([]);
+  const [showEnvModal, setShowEnvModal] = useState(false);
+  const [editingEnvVar, setEditingEnvVar] = useState<EnvVar | null>(null);
+  const [envFormData, setEnvFormData] = useState({ key: '', value: '' });
+  const [envLoading, setEnvLoading] = useState(false);
 
   const fetchAppData = async () => {
     if (!socket) return;
@@ -55,6 +73,13 @@ export default function AppDetailPage() {
       
       if (logsResponse.success) {
         setLogs(logsResponse.data.logs || '');
+      }
+
+      // Fetch environment variables
+      const envResponse = await socket.emitWithAck('app:env:list', { appName });
+      
+      if (envResponse.success) {
+        setEnvVars(envResponse.data.envVars || []);
       }
 
     } catch (err) {
@@ -173,6 +198,98 @@ export default function AppDetailPage() {
         return 'light';
       default:
         return 'light';
+    }
+  };
+
+  // Environment variable management functions
+  const openEnvModal = (envVar?: EnvVar) => {
+    if (envVar) {
+      setEditingEnvVar(envVar);
+      setEnvFormData({ key: envVar.key, value: envVar.value });
+    } else {
+      setEditingEnvVar(null);
+      setEnvFormData({ key: '', value: '' });
+    }
+    setShowEnvModal(true);
+  };
+
+  const closeEnvModal = () => {
+    setShowEnvModal(false);
+    setEditingEnvVar(null);
+    setEnvFormData({ key: '', value: '' });
+  };
+
+  const handleEnvFormChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setEnvFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const saveEnvVar = async () => {
+    if (!socket || !envFormData.key.trim()) return;
+
+    try {
+      setEnvLoading(true);
+      setError(null);
+
+      const eventName = editingEnvVar ? 'app:env:set' : 'app:env:add';
+      const response = await socket.emitWithAck(eventName, {
+        appName,
+        key: envFormData.key.trim(),
+        value: envFormData.value
+      });
+
+      if (response.success) {
+        setSuccess(editingEnvVar ? 'Environment variable updated successfully' : 'Environment variable added successfully');
+        closeEnvModal();
+        
+        // Refresh environment variables
+        const envResponse = await socket.emitWithAck('app:env:list', { appName });
+        if (envResponse.success) {
+          setEnvVars(envResponse.data.envVars || []);
+        }
+      } else {
+        setError(response.error || `Failed to ${editingEnvVar ? 'update' : 'add'} environment variable`);
+      }
+    } catch (err) {
+      setError(`Failed to ${editingEnvVar ? 'update' : 'add'} environment variable`);
+      console.error('Error saving env var:', err);
+    } finally {
+      setEnvLoading(false);
+    }
+  };
+
+  const deleteEnvVar = async (key: string) => {
+    if (!confirm(`Are you sure you want to delete the environment variable "${key}"?`)) {
+      return;
+    }
+
+    if (!socket) return;
+
+    try {
+      setEnvLoading(true);
+      setError(null);
+
+      const response = await socket.emitWithAck('app:env:delete', {
+        appName,
+        key
+      });
+
+      if (response.success) {
+        setSuccess('Environment variable deleted successfully');
+        
+        // Refresh environment variables
+        const envResponse = await socket.emitWithAck('app:env:list', { appName });
+        if (envResponse.success) {
+          setEnvVars(envResponse.data.envVars || []);
+        }
+      } else {
+        setError(response.error || 'Failed to delete environment variable');
+      }
+    } catch (err) {
+      setError('Failed to delete environment variable');
+      console.error('Error deleting env var:', err);
+    } finally {
+      setEnvLoading(false);
     }
   };
 
@@ -500,6 +617,82 @@ export default function AppDetailPage() {
           </ComponentCard>
         )}
 
+        {/* Environment Variables */}
+        <ComponentCard title="Environment Variables" desc="Manage application environment variables">
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                Configure environment variables for your application
+              </p>
+              <Button
+                onClick={() => openEnvModal()}
+                disabled={envLoading}
+                variant="primary"
+                size="sm"
+              >
+                Add Variable
+              </Button>
+            </div>
+
+            {envVars.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-gray-500 dark:text-gray-400">No environment variables configured</p>
+                <Button
+                  onClick={() => openEnvModal()}
+                  disabled={envLoading}
+                  variant="outline"
+                  size="sm"
+                  className="mt-2"
+                >
+                  Add Your First Variable
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {envVars.map((envVar) => (
+                  <div
+                    key={envVar.id}
+                    className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-sm font-medium text-gray-900 dark:text-white">
+                          {envVar.key}
+                        </span>
+                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                          =
+                        </span>
+                        <span className="text-sm text-gray-600 dark:text-gray-300 truncate">
+                          {envVar.value.length > 50 ? `${envVar.value.substring(0, 50)}...` : envVar.value}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-2 ml-2">
+                      <Button
+                        onClick={() => openEnvModal(envVar)}
+                        disabled={envLoading}
+                        variant="outline"
+                        size="sm"
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        onClick={() => deleteEnvVar(envVar.key)}
+                        disabled={envLoading}
+                        variant="outline"
+                        size="sm"
+                        className="text-red-600 hover:text-red-700 border-red-300 hover:border-red-400"
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </ComponentCard>
+
         {/* Actions */}
         <ComponentCard title="Actions" desc="Manage your application">
           <div className="grid grid-cols-2 gap-3">
@@ -576,7 +769,7 @@ export default function AppDetailPage() {
 
       {/* Logs */}
       <ComponentCard title="Service Logs" desc="Real-time systemctl service output (journalctl)">
-        <div className="bg-black text-green-400 font-mono text-sm p-4 rounded-lg h-96 overflow-y-auto">
+        <div ref={el => { if (el) el.scrollTop = el.scrollHeight; }} className="bg-black text-green-400 font-mono text-sm p-4 rounded-lg h-96 overflow-y-auto">
           {logs ? (
             <pre className="whitespace-pre-wrap">{logs}</pre>
           ) : (
@@ -584,6 +777,73 @@ export default function AppDetailPage() {
           )}
         </div>
       </ComponentCard>
+
+      {/* Environment Variable Modal */}
+      <Modal
+        isOpen={showEnvModal}
+        onClose={closeEnvModal}
+      >
+        <div className="space-y-4">
+          <div className="mb-6">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+              {editingEnvVar ? 'Edit Environment Variable' : 'Add Environment Variable'}
+            </h3>
+          </div>
+
+          <div>
+            <Label htmlFor="env-key">Variable Name</Label>
+            <input
+              id="env-key"
+              name="key"
+              type="text"
+              value={envFormData.key}
+              onChange={handleEnvFormChange}
+              placeholder="e.g., NODE_ENV, DATABASE_URL"
+              disabled={envLoading || !!editingEnvVar}
+              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-brand-500 focus:border-brand-500 disabled:bg-gray-100 disabled:cursor-not-allowed dark:bg-gray-800 dark:border-gray-600 dark:text-white dark:placeholder-gray-500"
+            />
+            {editingEnvVar && (
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                Variable name cannot be changed when editing
+              </p>
+            )}
+          </div>
+
+          <div>
+            <Label htmlFor="env-value">Variable Value</Label>
+            <input
+              id="env-value"
+              name="value"
+              type="text"
+              value={envFormData.value}
+              onChange={handleEnvFormChange}
+              placeholder="Enter the value"
+              disabled={envLoading}
+              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-brand-500 focus:border-brand-500 disabled:bg-gray-100 disabled:cursor-not-allowed dark:bg-gray-800 dark:border-gray-600 dark:text-white dark:placeholder-gray-500"
+            />
+          </div>
+
+          <div className="flex justify-end space-x-3 pt-4">
+            <Button
+              onClick={closeEnvModal}
+              disabled={envLoading}
+              variant="outline"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={saveEnvVar}
+              disabled={envLoading || !envFormData.key.trim()}
+              variant="primary"
+            >
+              {envLoading 
+                ? (editingEnvVar ? 'Updating...' : 'Adding...') 
+                : (editingEnvVar ? 'Update Variable' : 'Add Variable')
+              }
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

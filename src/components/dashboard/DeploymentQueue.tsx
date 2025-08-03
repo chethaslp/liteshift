@@ -310,6 +310,7 @@ export default function DeploymentQueue() {
                   </div>
                 </div>
                 <div 
+                  ref={el => { if (el) el.scrollTop = el.scrollHeight; }}
                   className="deployment-logs p-3 text-sm text-gray-100 dark:text-gray-200 font-mono overflow-y-auto max-h-80 whitespace-pre-wrap"
                 >
                   {item.logs}

@@ -47,11 +47,12 @@ export default function CaddyPage() {
   // Form state for adding domain
   const [newDomain, setNewDomain] = useState({
     appName: '',
-    domain: ''
+    domain: '',
+    sslEnabled: true
   });
 
   const [apps, setApps] = useState<App[]>([]);
-  const { socket } = useSocketContext();
+  const { socket, systemInfo } = useSocketContext();
 
   const fetchStatus = async () => {
     if (!socket) return;
@@ -210,13 +211,14 @@ export default function CaddyPage() {
       
       const response = await socket.emitWithAck('caddy:add-domain', {
         appName: newDomain.appName,
-        domain: newDomain.domain
+        domain: newDomain.domain,
+        sslEnabled: newDomain.sslEnabled
       });
       
       if (response.success) {
         setSuccess('Domain added successfully');
         setShowAddDomainModal(false);
-        setNewDomain({ appName: '', domain: '' });
+        setNewDomain({ appName: '', domain: '', sslEnabled: true });
         fetchData();
       } else {
         setError(response.error || 'Failed to add domain');
@@ -497,7 +499,10 @@ export default function CaddyPage() {
                   <div className="flex items-center space-x-4">
                     <div>
                       <h3 className="font-medium text-gray-900 dark:text-white">
-                        {domain.domain}
+                        {domain.ssl_enabled 
+                          ? (domain.domain.startsWith(':') ? 'https://'+ systemInfo?.host + domain.domain : domain.domain)
+                          : (domain.domain.startsWith(':') ? 'http://'+ systemInfo?.host + domain.domain : `http://${domain.domain}`)
+                        }
                       </h3>
                       <div className="flex items-center space-x-2 mt-1">
                         <span className="text-sm text-gray-500 dark:text-gray-400">
@@ -508,7 +513,7 @@ export default function CaddyPage() {
                             SSL Enabled
                           </Badge>
                         )}
-                        {domain.is_primary && (
+                        {domain.is_primary === true && (
                           <Badge color="info" variant="light" size="sm">
                             Primary
                           </Badge>
@@ -517,9 +522,12 @@ export default function CaddyPage() {
                     </div>
                   </div>
                   
-                  <div className="flex items-center space-x-2">
+                  <div className="flex items-center space-x-2 gap-2">
                     <a
-                      href={`https://${domain.domain}`}
+                      href={domain.ssl_enabled 
+                        ? (domain.domain.startsWith(':') ? 'https://'+ systemInfo?.host + domain.domain : `https://${domain.domain}`)
+                        : (domain.domain.startsWith(':') ? 'http://'+ systemInfo?.host + domain.domain : `http://${domain.domain}`)
+                      }
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
@@ -552,62 +560,194 @@ export default function CaddyPage() {
         isOpen={showAddDomainModal} 
         onClose={() => {
           setShowAddDomainModal(false);
-          setNewDomain({ appName: '', domain: '' });
+          setNewDomain({ appName: '', domain: '', sslEnabled: true });
           setError(null);
         }}
+        isFullscreen={true}
+        showCloseButton={false}
+        className="flex items-center justify-center backdrop-blur-sm"
       >
-        <div className="bg-white dark:bg-gray-900 p-6 rounded-lg max-w-md w-full">
-          <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-6">Add Domain</h2>
-          
-          <div className="space-y-4">
-            <div>
-              <Label htmlFor="app-select">Application</Label>
-              <select
-                id="app-select"
-                value={newDomain.appName}
-                onChange={(e) => setNewDomain(prev => ({ ...prev, appName: e.target.value }))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-              >
-                <option value="">Select an application</option>
-                {apps.map((app) => (
-                  <option key={app.name} value={app.name}>
-                    {app.name}
-                  </option>
-                ))}
-              </select>
+        <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-lg mx-4">
+          {/* Header */}
+          <div className="flex items-center justify-between p-6 pb-4 border-b border-gray-200 dark:border-gray-700">
+            <div className="flex items-center space-x-3">
+              <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-r from-blue-500 to-purple-600">
+                <FaPlus className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-gray-900 dark:text-white">Add New Domain</h2>
+              </div>
             </div>
+            <button
+              onClick={() => {
+                setShowAddDomainModal(false);
+                setNewDomain({ appName: '', domain: '', sslEnabled: true });
+                setError(null);
+              }}
+              className="flex items-center justify-center w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 transition-colors"
+            >
+              <svg className="w-4 h-4 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
 
-            <div>
-              <Label htmlFor="domain-input">Domain</Label>
-              <InputField
-                id="domain-input"
-                type="text"
-                defaultValue={newDomain.domain}
-                onChange={(e) => setNewDomain(prev => ({ ...prev, domain: e.target.value }))}
-                placeholder="example.com"
-              />
+          {/* Content */}
+          <div className="p-6">
+            <div className="space-y-6">
+              <div>
+                <Label htmlFor="app-select">Application *</Label>
+                <div className="mt-2 relative">
+                  <select
+                    id="app-select"
+                    value={newDomain.appName}
+                    onChange={(e) => setNewDomain(prev => ({ ...prev, appName: e.target.value }))}
+                    className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 appearance-none pr-10"
+                  >
+                    <option value="">Choose an application</option>
+                    {apps.map((app) => (
+                      <option key={app.name} value={app.name}>
+                        {app.name}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                    <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Select the application this domain will point to
+                </p>
+              </div>
+
+              <div>
+                <Label htmlFor="domain-input">Domain *</Label>
+                <div className="mt-2">
+                  <InputField
+                    id="domain-input"
+                    type="text"
+                    defaultValue={newDomain.domain}
+                    onChange={(e) => setNewDomain(prev => ({ ...prev, domain: e.target.value }))}
+                    placeholder="example.com or subdomain.example.com"
+                    className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
+                  />
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Enter the full domain name {newDomain.sslEnabled ? '(SSL will be automatically configured)' : '(HTTP only)'}
+                </p>
+              </div>
+
+              {/* SSL Toggle */}
+              <div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>SSL Configuration</Label>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      {newDomain.sslEnabled ? 'HTTPS with automatic SSL certificates' : 'HTTP only (not recommended for production)'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setNewDomain(prev => ({ ...prev, sslEnabled: !prev.sslEnabled }))}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                      newDomain.sslEnabled 
+                        ? 'bg-blue-600' 
+                        : 'bg-gray-200 dark:bg-gray-700'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        newDomain.sslEnabled ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              {/* Feature Preview */}
+              <div className={`p-4 rounded-xl border transition-all duration-200 ${
+                newDomain.sslEnabled 
+                  ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
+                  : 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800'
+              }`}>
+                <div className="flex items-start space-x-3">
+                  <div className={`flex items-center justify-center w-6 h-6 rounded-full flex-shrink-0 mt-0.5 ${
+                    newDomain.sslEnabled 
+                      ? 'bg-blue-500'
+                      : 'bg-orange-500'
+                  }`}>
+                    {newDomain.sslEnabled ? (
+                      <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
+                      </svg>
+                    )}
+                  </div>
+                  <div>
+                    <h4 className={`text-sm font-medium ${
+                      newDomain.sslEnabled 
+                        ? 'text-blue-900 dark:text-blue-100'
+                        : 'text-orange-900 dark:text-orange-100'
+                    }`}>
+                      {newDomain.sslEnabled ? 'Automatic SSL' : 'HTTP Only'}
+                    </h4>
+                    <p className={`text-xs mt-1 ${
+                      newDomain.sslEnabled 
+                        ? 'text-blue-700 dark:text-blue-300'
+                        : 'text-orange-700 dark:text-orange-300'
+                    }`}>
+                      {newDomain.sslEnabled 
+                        ? 'Caddy will automatically provision and renew SSL certificates for your domain'
+                        : 'Domain will be accessible via HTTP only. SSL can be enabled later.'
+                      }
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div className="flex justify-end space-x-3 mt-6">
-            <Button
-              onClick={() => {
-                setShowAddDomainModal(false);
-                setNewDomain({ appName: '', domain: '' });
-                setError(null);
-              }}
-              variant="outline"
-              disabled={actionLoading === 'add-domain'}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={addDomain}
-              variant="primary"
-              disabled={!socket || actionLoading === 'add-domain' || !newDomain.appName || !newDomain.domain}
-            >
-              {actionLoading === 'add-domain' ? 'Adding...' : 'Add Domain'}
-            </Button>
+          {/* Footer */}
+          <div className="flex items-center justify-between p-6 pt-4 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700 rounded-b-3xl">
+            <div className="text-xs text-gray-500 dark:text-gray-400">
+              {newDomain.sslEnabled 
+                ? 'Domain will be added with HTTPS and SSL certificates'
+                : 'Domain will be added with HTTP only'
+              }
+            </div>
+            <div className="flex space-x-3">
+              <Button
+                onClick={() => {
+                  setShowAddDomainModal(false);
+                  setNewDomain({ appName: '', domain: '', sslEnabled: true });
+                  setError(null);
+                }}
+                variant="outline"
+                disabled={actionLoading === 'add-domain'}
+                size="md"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={addDomain}
+                variant="primary"
+                disabled={!socket || actionLoading === 'add-domain' || !newDomain.appName || !newDomain.domain}
+                size="md"
+                className="min-w-[100px]"
+              >
+                {actionLoading === 'add-domain' ? 
+                  <div className="flex items-center space-x-2">
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                    <span>Adding...</span>
+                  </div>
+                  : 'Add Domain'
+                }
+              </Button>
+            </div>
           </div>
         </div>
       </Modal>
@@ -619,32 +759,105 @@ export default function CaddyPage() {
         isFullscreen={true}
         showCloseButton={false}
       >
-        <div className="bg-white dark:bg-gray-900 p-6 h-full">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-bold text-gray-900 dark:text-white">Caddy Configuration</h2>
-            <div className="flex items-center space-x-3">
-              {configValid !== null && (
-                <Badge 
-                  color={configValid ? 'success' : 'error'}
-                  variant="light"
-                >
-                  {configValid ? 'Valid Configuration' : 'Invalid Configuration'}
-                </Badge>
-              )}
-              <Button
-                onClick={() => setShowConfigModal(false)}
-                variant="outline"
-                size="sm"
-              >
-                Close
-              </Button>
+        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white dark:from-gray-900 dark:to-gray-800">
+          <div className="flex flex-col h-screen">
+            {/* Header */}
+            <div className="flex-shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm">
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div className="flex items-center justify-between h-16">
+                  <div className="flex items-center space-x-4">
+                    <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-r from-green-500 to-blue-600">
+                      <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                      </svg>
+                    </div>
+                    <div>
+                      <h1 className="text-2xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-300 bg-clip-text text-transparent">
+                        Caddy Configuration
+                      </h1>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                        Current Caddyfile configuration
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    {configValid !== null && (
+                      <div className={`px-3 py-1.5 rounded-full text-sm font-medium flex items-center space-x-2 ${
+                        configValid 
+                          ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400' 
+                          : 'bg-red-100 text-red-800 dark:bg-red-900/20 dark:text-red-400'
+                      }`}>
+                        {configValid ? (
+                          <>
+                            <FaCheck className="w-3 h-3" />
+                            <span>Valid Configuration</span>
+                          </>
+                        ) : (
+                          <>
+                            <FaTimes className="w-3 h-3" />
+                            <span>Invalid Configuration</span>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => setShowConfigModal(false)}
+                      className="flex items-center justify-center w-10 h-10 rounded-xl bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      <svg className="w-5 h-5 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-          
-          <div className="bg-gray-900 dark:bg-gray-950 rounded border border-gray-600 dark:border-gray-700 h-96 overflow-y-auto">
-            <pre className="p-4 text-sm text-gray-100 dark:text-gray-200 font-mono whitespace-pre-wrap">
-              {config || 'No configuration available'}
-            </pre>
+
+            {/* Content */}
+            <div className="flex-1 overflow-hidden">
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 h-full">
+                <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-xl border border-gray-200 dark:border-gray-700 h-full overflow-hidden">
+                  <div className="p-6 h-full flex flex-col">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Caddyfile Content</h3>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">Auto-generated reverse proxy configuration</p>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(config);
+                            setSuccess('Configuration copied to clipboard');
+                          }}
+                          className="flex items-center space-x-2 px-3 py-1.5 text-sm bg-blue-100 hover:bg-blue-200 dark:bg-blue-900/20 dark:hover:bg-blue-900/40 text-blue-700 dark:text-blue-400 rounded-lg transition-colors"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          </svg>
+                          <span>Copy</span>
+                        </button>
+                      </div>
+                    </div>
+                    
+                    <div className="flex-1 bg-gray-900 dark:bg-gray-950 rounded-2xl border border-gray-300 dark:border-gray-700 overflow-hidden">
+                      <div className="h-full overflow-y-auto">
+                        <pre className="p-6 text-sm text-gray-100 dark:text-gray-200 font-mono whitespace-pre-wrap leading-relaxed">
+                          {config || (
+                            <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                              <svg className="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                              </svg>
+                              <p className="text-lg font-medium">No configuration available</p>
+                              <p className="text-sm text-gray-400 mt-1">Configuration will appear here once Caddy is configured</p>
+                            </div>
+                          )}
+                        </pre>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </Modal>
@@ -653,37 +866,131 @@ export default function CaddyPage() {
       <Modal 
         isOpen={showLogsModal} 
         showCloseButton={false}
-        className="w-full h-full"
         onClose={() => setShowLogsModal(false)}
         isFullscreen={true}
       >
-        <div className="bg-white dark:bg-gray-900 p-6 h-full">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-bold text-gray-900 dark:text-white">Caddy Logs</h2>
-            <div className="flex items-center space-x-3">
-              <Button
-                onClick={fetchLogs}
-                disabled={!socket}
-                variant="outline"
-                size="sm"
-              >
-                <FaSyncAlt className="mr-2" />
-                Refresh
-              </Button>
-              <Button
-                onClick={() => setShowLogsModal(false)}
-                variant="outline"
-                size="sm"
-              >
-                Close
-              </Button>
+        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white dark:from-gray-900 dark:to-gray-800">
+          <div className="flex flex-col h-screen">
+            {/* Header */}
+            <div className="flex-shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm">
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div className="flex items-center justify-between h-16">
+                  <div className="flex items-center space-x-4">
+                    <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-r from-orange-500 to-red-600">
+                      <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <h1 className="text-2xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-300 bg-clip-text text-transparent">
+                        Caddy Logs
+                      </h1>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                        Real-time server logs and events
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    <button
+                      onClick={fetchLogs}
+                      disabled={!socket}
+                      className="flex items-center space-x-2 px-3 py-1.5 text-sm bg-blue-100 hover:bg-blue-200 dark:bg-blue-900/20 dark:hover:bg-blue-900/40 text-blue-700 dark:text-blue-400 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      <FaSyncAlt className="w-3 h-3" />
+                      <span>Refresh</span>
+                    </button>
+                    <button
+                      onClick={() => setShowLogsModal(false)}
+                      className="flex items-center justify-center w-10 h-10 rounded-xl bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      <svg className="w-5 h-5 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-          
-          <div className="bg-gray-900 dark:bg-gray-950 rounded border border-gray-600 dark:border-gray-700 h-96 overflow-y-auto">
-            <pre className="p-4 text-sm text-gray-100 dark:text-gray-200 font-mono whitespace-pre-wrap">
-              {logs || 'No logs available'}
-            </pre>
+
+            {/* Content */}
+            <div className="flex-1 overflow-hidden">
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 h-full">
+                <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-xl border border-gray-200 dark:border-gray-700 h-full overflow-hidden">
+                  <div className="p-6 h-full flex flex-col">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Server Logs</h3>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">Live output from Caddy server</p>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(logs);
+                            setSuccess('Logs copied to clipboard');
+                          }}
+                          className="flex items-center space-x-2 px-3 py-1.5 text-sm bg-green-100 hover:bg-green-200 dark:bg-green-900/20 dark:hover:bg-green-900/40 text-green-700 dark:text-green-400 rounded-lg transition-colors"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          </svg>
+                          <span>Copy</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            const element = document.querySelector('#logs-container');
+                            if (element) {
+                              element.scrollTop = element.scrollHeight;
+                            }
+                          }}
+                          className="flex items-center space-x-2 px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-400 rounded-lg transition-colors"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                          </svg>
+                          <span>Scroll to Bottom</span>
+                        </button>
+                      </div>
+                    </div>
+                    
+                    <div className="flex-1 bg-gray-900 dark:bg-gray-950 rounded-2xl border border-gray-300 dark:border-gray-700 overflow-hidden">
+                      <div 
+                        id="logs-container"
+                        className="h-full overflow-y-auto"
+                        ref={el => { if (el) el.scrollTop = el.scrollHeight; }}
+                      >
+                        <pre className="p-6 text-sm text-gray-100 dark:text-gray-200 font-mono whitespace-pre-wrap leading-relaxed">
+                          {logs || (
+                            <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                              <svg className="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                              </svg>
+                              <p className="text-lg font-medium">No logs available</p>
+                              <p className="text-sm text-gray-400 mt-1">Logs will appear here when Caddy is running</p>
+                            </div>
+                          )}
+                        </pre>
+                      </div>
+                    </div>
+
+                    {/* Footer Info */}
+                    <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                      <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+                        <div className="flex items-center space-x-4">
+                          <span>Last updated: {new Date().toLocaleTimeString()}</span>
+                          <span className="flex items-center space-x-1">
+                            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                            <span>Live logs</span>
+                          </span>
+                        </div>
+                        <div>
+                          Press Ctrl+F to search logs
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </Modal>
