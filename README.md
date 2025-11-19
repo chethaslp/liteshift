@@ -19,7 +19,7 @@ Liteshift will auto-detect your runtime - Bun, Node or python.
 
 ### How to setup the server?
 
-1. Create a fresh compute instance in a provided of your choice, or you could also use your homelab setup or even a Raspberry Pi - as long as they use linux. At the momment liteshift works ONLY on linux.
+1. Create a fresh compute instance in a cloud provider of your choice, or you could also use your homelab setup or even a Raspberry Pi - as long as they use linux. At the momment liteshift works ONLY on linux.
 1. Now once everything is setup use the command line to execute the following command:
 ```bash
 bash <(curl -s https://raw.githubusercontent.com/chethaslp/liteshift-host/refs/heads/main/install.sh)
