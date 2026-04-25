@@ -7,13 +7,15 @@ import { useRouter } from 'next/navigation';
 import SignInForm from '@/components/auth/SignInForm';
 import Loading from '@/components/common/Loading';
 
-export const SocketContext = React.createContext<SocketContextProps>({ setCreds: () => {} });
+export const SocketContext = React.createContext<SocketContextProps>({ setCreds: () => {}, error: null, setError: () => {} });
 
 interface SocketContextProps {
     user?: User;
     socket?: Socket;
     systemInfo?: SystemInfo;
     setCreds : React.Dispatch<React.SetStateAction<Credential | undefined>>;
+    error: string | null;
+    setError: React.Dispatch<React.SetStateAction<string | null>>;
 }   
 
 export const useSocketContext = () => React.useContext(SocketContext);
@@ -25,6 +27,7 @@ export const SocketContextProvider = ({ children }: { children: React.ReactNode}
     const [systemInfo, setSystemInfo] = React.useState<SystemInfo>();
     const [loading, setLoading] = React.useState<'connecting' | 'reconnecting' | 'connected' | 'disconnected'>();
     const [creds, setCreds] = React.useState<Credential>();
+    const [error, setError] = React.useState<string | null>(null);
     const router = useRouter();
 
     React.useEffect(() => {
@@ -34,22 +37,25 @@ export const SocketContextProvider = ({ children }: { children: React.ReactNode}
                 }
                 try {
                     setLoading('connecting');
+                    setError(null);
                     const socketio = io(creds.host, {
                         reconnectionDelayMax: 10000,
                         auth: {
                             username: creds.username,
                             password: creds.password
                         },
-                        timeout: 10000 // Add timeout to detect connection issues faster
+                        timeout: 10000, // Add timeout to detect connection issues faster
+                        transports: ["websocket"]
                     });
                     socketio.connect();
 
                     setSocket(socketio);
-                } catch (error) {
-                    console.error('Socket initialization error:', error);
+                } catch (err) {
+                    console.error('Socket initialization error:', err);
                     setLoading('disconnected');
-                    alert('Failed to connect to server. Please check the host address.');
+                    setError('Failed to connect to server. Please check the host address.');
                     setCreds(undefined);
+                    setSocket(undefined);
                 }
                 
     }, [creds]);
@@ -67,10 +73,13 @@ export const SocketContextProvider = ({ children }: { children: React.ReactNode}
                 if (response.success) {
                     setUser(response.user);
                     setSystemInfo(response.systemInfo);
+                    setError(null);
                 } else {
                     console.error('Handshake failed:', response);
-                    alert('Failed to authenticate. Please check your credentials.');
-                    // setCreds(undefined);
+                    setError('Failed to authenticate. Please check your credentials.');
+                    socket.disconnect();
+                    setSocket(undefined);
+                    setCreds(undefined);
                 }
             }
 
@@ -87,16 +96,17 @@ export const SocketContextProvider = ({ children }: { children: React.ReactNode}
             console.log("Disconnected from server!");
         });
 
-        socket.on('connect_error', (error) => {
-            console.error('Connection error:', error);
-            if (error.message.includes('auth')) {
+        socket.on('connect_error', (err) => {
+            console.error('Connection error:', err);
+            if (err.message.includes('auth')) {
                 setLoading(undefined);
-                alert('Authentication failed. Please check your credentials.');
+                setError('Authentication failed. Please check your credentials.');
             } else {
                 setLoading(undefined);
-                alert(`Cannot connect to server: ${error.message}`);
-                socket.disconnect();
+                setError(`Cannot connect to server: ${err.message}`);
             }
+            socket.disconnect();
+            setSocket(undefined);
             setCreds(undefined);
         });
 
@@ -108,7 +118,7 @@ export const SocketContextProvider = ({ children }: { children: React.ReactNode}
     }, [socket])
 
     return (
-        <SocketContext.Provider value={{ user, socket, setCreds, systemInfo } }>
+        <SocketContext.Provider value={{ user, socket, setCreds, systemInfo, error, setError } }>
             <div className="h-[100dvh] w-screen m-0 p-0">
                 <Loading 
                     message={loading === "reconnecting" ? "Reconnecting..." : "Connecting to server..."} 

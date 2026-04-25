@@ -16,9 +16,8 @@ import { useSocketContext } from "@/context/SocketContext";
 export default function SignInForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [isChecked, setIsChecked] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [host, setHost] = useState<string | null>(null);
-  const { setCreds } = useSocketContext();
+  const { setCreds, error, setError } = useSocketContext();
 
   useEffect(() => {
     if(localStorage.getItem("host") !== undefined && localStorage.getItem("host") !== "") {
@@ -104,20 +103,21 @@ export default function SignInForm() {
                     </span>
                   </div>
                 </div>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Checkbox checked={isChecked} onChange={setIsChecked} />
-                    <span className="block font-normal text-gray-700 text-theme-sm dark:text-gray-400">
-                      Keep me logged in
-                    </span>
+                <div className="flex flex-col gap-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <Checkbox checked={isChecked} onChange={setIsChecked} />
+                      <span className="block font-normal text-gray-700 text-theme-sm dark:text-gray-400">
+                        Keep me logged in
+                      </span>
+                    </div>
                   </div>
                   {error && (
-                  <div className="py-2 px-3 flex items-center justify-center bg-error-50 dark:bg-error-500 border border-error-200 dark:border-error-500 rounded-md">
-                    <IoIosWarning className="fill-error-500 dark:fill-white inline-block mr-2" />
-                    <p className="text-sm text-error-500 dark:text-white">{error}</p>
-                  </div>
-                )}
-                  
+                    <div className="py-2 px-3 flex items-start bg-error-50 dark:bg-error-500/10 border border-error-200 dark:border-error-500 rounded-md">
+                      <IoIosWarning className="fill-error-500 text-xl inline-block mr-2 mt-0.5 shrink-0" />
+                      <p className="text-sm text-error-500">{error}</p>
+                    </div>
+                  )}
                 </div>
                 <div>
                   <Button className="w-full" size="sm">

@@ -6,6 +6,7 @@ import Badge from '@/components/ui/badge/Badge';
 import { FaFile, FaGithub } from 'react-icons/fa6';
 import Link from 'next/link';
 import { useSocketContext } from '@/context/SocketContext';
+import { useRouter } from 'next/navigation';
 
 interface QueueItem {
   id: number;
@@ -28,6 +29,7 @@ export default function DeploymentQueue() {
   const [streamingLogs, setStreamingLogs] = useState<Set<number>>(new Set());
   const logsEndRef = useRef<{ [key: number]: HTMLDivElement | null }>({});
   const { socket } = useSocketContext();
+  const router = useRouter();
 
   const fetchQueue = async () => {
     if (!socket) return;
@@ -130,8 +132,11 @@ export default function DeploymentQueue() {
         newSet.delete(data.queueId);
         return newSet;
       });
+
+       if(data.finalStatus === 'completed') {
+        router.push(`/deployments/${data.queueId}`);
+      }
     });
-    
     
     return () => {
 
