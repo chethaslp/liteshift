@@ -38,6 +38,9 @@ export interface App {
     start_command: string;
     runtime: 'node' | 'python' | 'bun';
     port: number;
+    webhook_token?: string | null;
+    latest_commit_hash?: string | null;
+    latest_commit_message?: string | null;
     created_at: string; // ISO date string
     updated_at: string; // ISO date string
 }

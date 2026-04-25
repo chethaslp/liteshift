@@ -20,8 +20,12 @@ interface QueueItem {
   error_message?: string;
 }
 
+interface DeploymentQueueProps {
+  appName?: string;
+  refreshTrigger?: number;
+}
 
-export default function DeploymentQueue() {
+export default function DeploymentQueue({ appName, refreshTrigger = 0 }: DeploymentQueueProps = {}) {
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +42,10 @@ export default function DeploymentQueue() {
       const response = await socket.emitWithAck("deploy:queue-status", {});
       
       if (response.success) {
-        const newQueue = response.data;
+        let newQueue = response.data as QueueItem[];
+        if (appName) {
+          newQueue = newQueue.filter(item => item.app_name === appName);
+        }
         setQueue(newQueue);
         
         // Auto-expand logs for building deployments
@@ -154,7 +161,7 @@ export default function DeploymentQueue() {
         return new Set();
       });
     };
-  }, [socket]);
+  }, [socket, appName, refreshTrigger]);
 
   // Auto-scroll to bottom of logs when they update
   useEffect(() => {

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import ComponentCard from "@/components/common/ComponentCard";
 import Button from "@/components/ui/button/Button";
@@ -8,10 +8,13 @@ import Badge from "@/components/ui/badge/Badge";
 import Alert from "@/components/ui/alert/Alert";
 import { IoMdArrowBack } from "react-icons/io";
 import { useSocketContext } from "@/context/SocketContext";
-import { App as AppDetails, ServiceStatus } from "@/lib/models";
+import { App as AppDetails, ServiceStatus, AppDomain } from "@/lib/models";
 import { Modal } from "@/components/ui/modal";
 import InputField from "@/components/form/input/InputField";
 import Label from "@/components/form/Label";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs/Tabs";
+import { FaTrash, FaPlus, FaExternalLinkAlt, FaGithub, FaCog, FaCheck, FaTimes, FaRedo } from "react-icons/fa";
+import DeploymentQueue from "@/components/dashboard/DeploymentQueue";
 
 interface EnvVar {
   id: number;
@@ -25,11 +28,12 @@ export default function AppDetailPage() {
   const router = useRouter();
   const params = useParams();
   const appName = decodeURIComponent(params.appName as string);
-  const { socket } = useSocketContext();
+  const { socket, systemInfo } = useSocketContext();
 
   const [appDetails, setAppDetails] = useState<AppDetails | null>(null);
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [logs, setLogs] = useState<string>('');
+  const [domains, setDomains] = useState<AppDomain[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -42,15 +46,39 @@ export default function AppDetailPage() {
   const [envFormData, setEnvFormData] = useState({ key: '', value: '' });
   const [envLoading, setEnvLoading] = useState(false);
 
+  // Domains State
+  const [showAddDomainModal, setShowAddDomainModal] = useState(false);
+  const [newDomain, setNewDomain] = useState({ domain: '', sslEnabled: true });
+
+  const [redeployTrigger, setRedeployTrigger] = useState(0);
+
+  // App Config State
+  const [appConfigForm, setAppConfigForm] = useState({
+    branch: '',
+    installCommand: '',
+    buildCommand: '',
+    startCommand: ''
+  });
+
+  useEffect(() => {
+    if (appDetails) {
+      setAppConfigForm({
+        branch: appDetails.branch || '',
+        installCommand: appDetails.install_command || '',
+        buildCommand: appDetails.build_command || '',
+        startCommand: appDetails.start_command || ''
+      });
+    }
+  }, [appDetails]);
+
   const fetchAppData = async () => {
     if (!socket) return;
 
     try {
       setError(null);
       
-      // Fetch app details from database
+      // Fetch app details
       const appResponse = await socket.emitWithAck('app:get', { appName });
-      
       if (appResponse.success && appResponse.data.app) {
         setAppDetails(appResponse.data.app);
       } else {
@@ -60,26 +88,26 @@ export default function AppDetailPage() {
 
       // Fetch systemctl service status
       const statusResponse = await socket.emitWithAck('systemctl:status', { appName });
-      
       if (statusResponse.success) {
         setServiceStatus(statusResponse.data.status);
       }
 
       // Fetch logs
-      const logsResponse = await socket.emitWithAck('systemctl:logs', {
-        appName,
-        lines: 100
-      });
-      
+      const logsResponse = await socket.emitWithAck('systemctl:logs', { appName, lines: 100 });
       if (logsResponse.success) {
         setLogs(logsResponse.data.logs || '');
       }
 
       // Fetch environment variables
       const envResponse = await socket.emitWithAck('app:env:list', { appName });
-      
       if (envResponse.success) {
         setEnvVars(envResponse.data.envVars || []);
+      }
+
+      // Fetch domains
+      const domainsResponse = await socket.emitWithAck('app:domains:list', { appName });
+      if (domainsResponse.success) {
+        setDomains(domainsResponse.data.domains || []);
       }
 
     } catch (err) {
@@ -96,7 +124,6 @@ export default function AppDetailPage() {
     }
   }, [socket, appName]);
 
-  // Clear success message after 5 seconds
   useEffect(() => {
     if (success) {
       const timer = setTimeout(() => setSuccess(null), 5000);
@@ -106,41 +133,30 @@ export default function AppDetailPage() {
 
   const executeAction = async (action: string, eventName: string, successMessage: string) => {
     if (!socket) return;
-
     try {
       setActionLoading(action);
       setError(null);
-      
       const response = await socket.emitWithAck(eventName, { appName });
-      
       if (response.success) {
         setSuccess(successMessage);
-        // Refresh data after action
         setTimeout(fetchAppData, 1000);
       } else {
         setError(response.error || `Failed to ${action} application`);
       }
     } catch (err) {
       setError(`Failed to ${action} application`);
-      console.error(`Error ${action}ing app:`, err);
     } finally {
       setActionLoading(null);
     }
   };
 
   const deleteApp = async () => {
-    if (!confirm(`Are you sure you want to delete "${appName}"? This action cannot be undone.`)) {
-      return;
-    }
-
+    if (!confirm(`Are you sure you want to delete "${appName}"? This action cannot be undone.`)) return;
     if (!socket) return;
-
     try {
       setActionLoading('delete');
       setError(null);
-      
       const response = await socket.emitWithAck('app:delete', { appName });
-      
       if (response.success) {
         setSuccess('Application deleted successfully');
         router.push('/apps');
@@ -149,59 +165,167 @@ export default function AppDetailPage() {
       }
     } catch (err) {
       setError('Failed to delete application');
-      console.error('Error deleting app:', err);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const updateAppConfig = async () => {
+    if (!socket) return;
+    try {
+      setActionLoading('update-config');
+      setError(null);
+      const response = await socket.emitWithAck('app:update', {
+        appName,
+        branch: appConfigForm.branch,
+        installCommand: appConfigForm.installCommand,
+        buildCommand: appConfigForm.buildCommand,
+        startCommand: appConfigForm.startCommand
+      });
+      if (response.success) {
+        setSuccess('Application settings updated successfully');
+        fetchAppData();
+      } else {
+        setError(response.error || 'Failed to update application settings');
+      }
+    } catch (err) {
+      setError('Failed to update application settings');
     } finally {
       setActionLoading(null);
     }
   };
 
   const redeployApp = async () => {
-    if (!confirm(`Are you sure you want to redeploy "${appName}"? This will restart the application with the latest code.`)) {
-      return;
-    }
-
+    if (!confirm(`Are you sure you want to redeploy "${appName}"? This will restart the application with the latest code.`)) return;
     if (!socket) return;
-
     try {
       setActionLoading('redeploy');
       setError(null);
-      
       const response = await socket.emitWithAck('deploy:redeploy', { appName });
-      
       if (response.success) {
-        const queueInfo = response.data;
-        setSuccess(`Redeploy queued successfully! Queue ID: ${queueInfo.queueId}. ${queueInfo.message}`);
+        setSuccess(`Redeploy queued successfully!`);
+        setRedeployTrigger(prev => prev + 1);
       } else {
         setError(response.error || 'Failed to queue redeploy');
       }
     } catch (err) {
       setError('Failed to redeploy application');
-      console.error('Error redeploying app:', err);
     } finally {
       setActionLoading(null);
     }
   };
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString();
-  };
-
-  const getStatusBadgeColor = (status: string) => {
-    switch (status) {
-      case 'active':
-        return 'success';
-      case 'inactive':
-        return 'error';
-      case 'failed':
-        return 'error';
-      case 'unknown':
-        return 'light';
-      default:
-        return 'light';
+  const clearDeployHistory = async () => {
+    if (!confirm(`Are you sure you want to clear deployment history for "${appName}"?`)) return;
+    if (!socket) return;
+    try {
+      setActionLoading('clear-history');
+      setError(null);
+      const response = await socket.emitWithAck('deploy:clear-history', { appName });
+      if (response.success) {
+        setSuccess('Deployment history cleared successfully');
+        // A refresh is handled by the DeploymentQueue auto-refresh mostly, or we could trigger a local refresh
+      } else {
+        setError(response.error || 'Failed to clear history');
+      }
+    } catch (err) {
+      setError('Failed to clear history');
+    } finally {
+      setActionLoading(null);
     }
   };
 
-  // Environment variable management functions
+  // Webhooks
+  const generateWebhook = async () => {
+    if (!socket) return;
+    try {
+      setActionLoading('webhook-generate');
+      setError(null);
+      const response = await socket.emitWithAck('app:webhook:generate', { appName });
+      if (response.success) {
+        setSuccess('Webhook generated successfully');
+        fetchAppData();
+      } else {
+        setError(response.error || 'Failed to generate webhook');
+      }
+    } catch (err) {
+      setError('Failed to generate webhook');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const removeWebhook = async () => {
+    if (!confirm('Are you sure you want to remove the webhook token? GitHub Push-to-Deploy will stop working.')) return;
+    if (!socket) return;
+    try {
+      setActionLoading('webhook-remove');
+      setError(null);
+      const response = await socket.emitWithAck('app:webhook:remove', { appName });
+      if (response.success) {
+        setSuccess('Webhook removed successfully');
+        fetchAppData();
+      } else {
+        setError(response.error || 'Failed to remove webhook');
+      }
+    } catch (err) {
+      setError('Failed to remove webhook');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Domains
+  const addDomain = async () => {
+    if (!newDomain.domain) {
+      setError('Domain is required');
+      return;
+    }
+    if (!socket) return;
+    try {
+      setActionLoading('add-domain');
+      setError(null);
+      const response = await socket.emitWithAck('caddy:add-domain', {
+        appName,
+        domain: newDomain.domain,
+        sslEnabled: newDomain.sslEnabled
+      });
+      if (response.success) {
+        setSuccess('Domain added successfully');
+        setShowAddDomainModal(false);
+        setNewDomain({ domain: '', sslEnabled: true });
+        fetchAppData();
+      } else {
+        setError(response.error || 'Failed to add domain');
+      }
+    } catch (err) {
+      setError('Failed to add domain');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const removeDomain = async (domainId: number, domainName: string) => {
+    if (!confirm(`Are you sure you want to remove domain "${domainName}"?`)) return;
+    if (!socket) return;
+    try {
+      setActionLoading(`remove-${domainId}`);
+      setError(null);
+      const response = await socket.emitWithAck('caddy:remove-domain', { domainId });
+      if (response.success) {
+        setSuccess('Domain removed successfully');
+        fetchAppData();
+      } else {
+        setError(response.error || 'Failed to remove domain');
+      }
+    } catch (err) {
+      setError('Failed to remove domain');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Environment Variables
   const openEnvModal = (envVar?: EnvVar) => {
     if (envVar) {
       setEditingEnvVar(envVar);
@@ -212,84 +336,66 @@ export default function AppDetailPage() {
     }
     setShowEnvModal(true);
   };
-
   const closeEnvModal = () => {
     setShowEnvModal(false);
     setEditingEnvVar(null);
     setEnvFormData({ key: '', value: '' });
   };
-
   const handleEnvFormChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setEnvFormData(prev => ({ ...prev, [name]: value }));
   };
-
   const saveEnvVar = async () => {
     if (!socket || !envFormData.key.trim()) return;
-
     try {
       setEnvLoading(true);
       setError(null);
-
       const eventName = editingEnvVar ? 'app:env:set' : 'app:env:add';
       const response = await socket.emitWithAck(eventName, {
         appName,
         key: envFormData.key.trim(),
         value: envFormData.value
       });
-
       if (response.success) {
-        setSuccess(editingEnvVar ? 'Environment variable updated successfully' : 'Environment variable added successfully');
+        setSuccess(editingEnvVar ? 'Environment variable updated' : 'Environment variable added');
         closeEnvModal();
-        
-        // Refresh environment variables
-        const envResponse = await socket.emitWithAck('app:env:list', { appName });
-        if (envResponse.success) {
-          setEnvVars(envResponse.data.envVars || []);
-        }
+        fetchAppData();
       } else {
-        setError(response.error || `Failed to ${editingEnvVar ? 'update' : 'add'} environment variable`);
+        setError(response.error || 'Failed to save environment variable');
       }
     } catch (err) {
-      setError(`Failed to ${editingEnvVar ? 'update' : 'add'} environment variable`);
-      console.error('Error saving env var:', err);
+      setError('Failed to save environment variable');
+    } finally {
+      setEnvLoading(false);
+    }
+  };
+  const deleteEnvVar = async (key: string) => {
+    if (!confirm(`Are you sure you want to delete "${key}"?`)) return;
+    if (!socket) return;
+    try {
+      setEnvLoading(true);
+      setError(null);
+      const response = await socket.emitWithAck('app:env:delete', { appName, key });
+      if (response.success) {
+        setSuccess('Environment variable deleted');
+        fetchAppData();
+      } else {
+        setError(response.error || 'Failed to delete env var');
+      }
+    } catch (err) {
+      setError('Failed to delete env var');
     } finally {
       setEnvLoading(false);
     }
   };
 
-  const deleteEnvVar = async (key: string) => {
-    if (!confirm(`Are you sure you want to delete the environment variable "${key}"?`)) {
-      return;
-    }
-
-    if (!socket) return;
-
-    try {
-      setEnvLoading(true);
-      setError(null);
-
-      const response = await socket.emitWithAck('app:env:delete', {
-        appName,
-        key
-      });
-
-      if (response.success) {
-        setSuccess('Environment variable deleted successfully');
-        
-        // Refresh environment variables
-        const envResponse = await socket.emitWithAck('app:env:list', { appName });
-        if (envResponse.success) {
-          setEnvVars(envResponse.data.envVars || []);
-        }
-      } else {
-        setError(response.error || 'Failed to delete environment variable');
-      }
-    } catch (err) {
-      setError('Failed to delete environment variable');
-      console.error('Error deleting env var:', err);
-    } finally {
-      setEnvLoading(false);
+  const formatDate = (dateString: string) => new Date(dateString).toLocaleString();
+  const getStatusBadgeColor = (status: string) => {
+    switch (status) {
+      case 'active': return 'success';
+      case 'inactive': return 'error';
+      case 'failed': return 'error';
+      default: return 'light';
     }
   };
 
@@ -297,23 +403,13 @@ export default function AppDetailPage() {
     return (
       <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
         <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-4">
-            <Button
-              onClick={() => router.back()}
-              variant="outline"
-              size="sm"
-            >
-                <IoMdArrowBack size={15} />
-                Back
-            </Button>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Loading...</h1>
-          </div>
+          <Button onClick={() => router.back()} variant="outline" size="sm">
+            <IoMdArrowBack size={15} /> Back
+          </Button>
         </div>
-        <div className="flex items-center flex-col justify-center h-64">
+        <div className="flex flex-col items-center justify-center h-64">
           <div className="animate-spin rounded-full mb-2 h-8 w-8 border-b-2 border-brand-600"></div>
-          <span className="ml-2 text-gray-600 dark:text-gray-400">
-            {!socket ? 'Connecting to server...' : 'Loading application details...'}
-          </span>
+          <span className="text-gray-600 dark:text-gray-400">Loading application details...</span>
         </div>
       </div>
     );
@@ -322,528 +418,353 @@ export default function AppDetailPage() {
   if (error && !appDetails) {
     return (
       <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-4">
-            <Button
-              onClick={() => router.back()}
-              variant="outline"
-              size="sm"
-            >
-              <IoMdArrowBack size={15} />
-                Back
-            </Button>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Error</h1>
-          </div>
-        </div>
-        <Alert
-          variant="error"
-          title="Error"
-          message={error}
-        />
+        <Button onClick={() => router.back()} variant="outline" size="sm" className="w-fit">
+          <IoMdArrowBack size={15} /> Back
+        </Button>
+        <Alert variant="error" title="Error" message={error} />
       </div>
     );
   }
+
+  const webhookUrl = systemInfo && appDetails?.webhook_token 
+    ? `http://${systemInfo.host}:8008/webhook/github/${encodeURIComponent(appDetails.name)}`
+    : '';
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-4">
-          <Button
-            onClick={() => router.back()}
-            variant="outline"
-            size="sm"
-          >
-            <IoMdArrowBack size={15} />
-                Back
+          <Button onClick={() => router.back()} variant="outline" size="sm">
+            <IoMdArrowBack size={15} /> Back
           </Button>
           <div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{appName}</h1>
             {appDetails && (
               <div className="flex items-center space-x-2 mt-1">
-                <Badge 
-                  color={getStatusBadgeColor(serviceStatus?.status || 'unknown')}
-                  variant="light"
-                  size="sm"
-                >
+                <Badge color={getStatusBadgeColor(serviceStatus?.status || 'unknown')} variant="light" size="sm">
                   {serviceStatus?.status || 'unknown'}
                 </Badge>
-                <span className="text-sm text-gray-500 dark:text-gray-400">ID: {appDetails.id}</span>
                 <span className="text-sm text-gray-500 dark:text-gray-400">Runtime: {appDetails.runtime}</span>
-                {serviceStatus?.enabled && (
-                  <Badge color="info" variant="light" size="sm">
-                    Auto-start
-                  </Badge>
-                )}
               </div>
             )}
           </div>
         </div>
-        <Button
-          onClick={fetchAppData}
-          disabled={!socket || loading}
-          variant="primary"
-        >
+        <Button onClick={fetchAppData} disabled={!socket || loading} variant="primary">
           Refresh
         </Button>
       </div>
 
-      {error && (
-        <Alert
-          variant="error"
-          title="Error"
-          message={error}
-        />
-      )}
+      {error && <Alert variant="error" title="Error" message={error} />}
+      {success && <Alert variant="success" title="Success" message={success} />}
 
-      {success && (
-        <Alert
-          variant="success"
-          title="Success"
-          message={success}
-        />
-      )}
+      <Tabs defaultValue="overview">
+        <TabsList className="mb-6">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="deployments">Deployments</TabsTrigger>
+          <TabsTrigger value="domains">Domains</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
+        </TabsList>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Application Info */}
-        <ComponentCard title="Application Info" desc="Current configuration and service details">
-          {appDetails && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">Service Status</div>
-                  <div className="text-lg font-semibold text-gray-900 dark:text-white">
-                    {serviceStatus?.status || 'unknown'}
-                  </div>
+        <TabsContent value="overview" className="space-y-6 mt-0">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <ComponentCard title="Performance" desc="Resource usage details">
+               <div className="grid grid-cols-2 gap-4">
+                 <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                   <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">Peak Memory</div>
+                   <div className="text-xl font-bold text-gray-900 dark:text-white">
+                     {serviceStatus?.memory?.peak || serviceStatus?.memory?.current || 'N/A'}
+                   </div>
+                 </div>
+                 <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                   <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">CPU Time</div>
+                   <div className="text-xl font-bold text-gray-900 dark:text-white">
+                     {serviceStatus?.cpu?.usage || 'N/A'}
+                   </div>
+                 </div>
+               </div>
+            </ComponentCard>
+            
+            <ComponentCard title="Deployment Details" desc="Latest deployment information">
+              <div className="space-y-3">
+                <div className="flex justify-between items-center pb-2 border-b border-gray-100 dark:border-gray-800">
+                  <span className="text-sm text-gray-500 dark:text-gray-400">Deployed URL</span>
+                  <a href={domains[0] ? `http${domains[0].ssl_enabled ? 's' : ''}://${domains[0].domain}` : '#'} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-brand-600 flex items-center hover:underline">
+                    {domains[0] ? domains[0].domain : 'No domains mapped'} <FaExternalLinkAlt className="ml-1 text-xs" />
+                  </a>
                 </div>
-                <div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">Auto-start</div>
-                  <div className="text-lg font-semibold text-gray-900 dark:text-white">
-                    {serviceStatus?.enabled ? 'Enabled' : 'Disabled'}
-                  </div>
+                <div className="flex justify-between items-center pb-2 border-b border-gray-100 dark:border-gray-800">
+                  <span className="text-sm text-gray-500 dark:text-gray-400">Last Deployed</span>
+                  <span className="text-sm font-medium text-gray-900 dark:text-white">{appDetails?.updated_at ? formatDate(appDetails.updated_at) : 'N/A'}</span>
                 </div>
-                <div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">Runtime</div>
-                  <div className="text-lg font-semibold text-gray-900 dark:text-white capitalize">
-                    {appDetails.runtime}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">Branch</div>
-                  <div className="text-lg font-semibold text-gray-900 dark:text-white">
-                    {appDetails.branch}
+                <div className="flex flex-col pt-1">
+                  <span className="text-sm text-gray-500 dark:text-gray-400 mb-1">Latest Commit</span>
+                  <div className="bg-gray-50 dark:bg-gray-800 p-2 rounded text-sm">
+                     <div className="font-mono text-xs text-gray-500 mb-1">{appDetails?.latest_commit_hash?.substring(0,7) || 'N/A'}</div>
+                     <div className="text-gray-900 dark:text-gray-200">{appDetails?.latest_commit_message || 'No commit history available.'}</div>
                   </div>
                 </div>
               </div>
-              
-              <div className="mt-6 space-y-3">
-                {appDetails.repository_url && (
-                  <div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400">Repository</div>
-                    <div className="text-sm font-mono text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-800/50 p-2 rounded">
-                      {appDetails.repository_url}
-                    </div>
-                  </div>
-                )}
-                
-                <div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">Start Command</div>
-                  <div className="text-sm font-mono text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-800/50 p-2 rounded">
-                    {appDetails.start_command}
-                  </div>
-                </div>
-                
-                {appDetails.install_command && (
-                  <div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400">Install Command</div>
-                    <div className="text-sm font-mono text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-800/50 p-2 rounded">
-                      {appDetails.install_command}
-                    </div>
-                  </div>
-                )}
-                
-                {appDetails.build_command && (
-                  <div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400">Build Command</div>
-                    <div className="text-sm font-mono text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-800/50 p-2 rounded">
-                      {appDetails.build_command}
-                    </div>
-                  </div>
-                )}
-                
-                {serviceStatus?.cwd && (
-                  <div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400">Working Directory</div>
-                    <div className="text-sm font-mono text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-800/50 p-2 rounded">
-                      {serviceStatus.cwd}
-                    </div>
-                  </div>
-                )}
-                
-                <div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">Created At</div>
-                  <div className="text-sm text-gray-900 dark:text-white">{formatDate(appDetails.created_at)}</div>
-                </div>
-                
-                <div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">Last Updated</div>
-                  <div className="text-sm text-gray-900 dark:text-white">{formatDate(appDetails.updated_at)}</div>
-                </div>
-              </div>
-            </div>
-          )}
-        </ComponentCard>
+            </ComponentCard>
+          </div>
 
-        {/* Enhanced Service Status */}
-        {serviceStatus && (
-          <ComponentCard title="Service Details" desc="Detailed systemctl service information">
-            <div className="space-y-4">
-              {serviceStatus.loaded && (
-                <div>
-                  <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Service Configuration</div>
-                  <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-lg space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-sm text-gray-600 dark:text-gray-400">State:</span>
-                      <span className="text-sm font-medium text-gray-900 dark:text-white">{serviceStatus.loaded.state}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm text-gray-600 dark:text-gray-400">Path:</span>
-                      <span className="text-sm font-mono text-gray-900 dark:text-white">{serviceStatus.loaded.path}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm text-gray-600 dark:text-gray-400">Enabled:</span>
-                      <span className="text-sm font-medium text-gray-900 dark:text-white">{serviceStatus.loaded.enabled}</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {serviceStatus.active && (
-                <div>
-                  <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Active Status</div>
-                  <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-lg space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-sm text-gray-600 dark:text-gray-400">State:</span>
-                      <Badge color={serviceStatus.active.state === 'active' ? 'success' : 'error'} size="sm">
-                        {serviceStatus.active.state}
-                      </Badge>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm text-gray-600 dark:text-gray-400">Sub-state:</span>
-                      <span className="text-sm font-medium text-gray-900 dark:text-white">{serviceStatus.active.subState}</span>
-                    </div>
-                    {serviceStatus.active.since && (
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-600 dark:text-gray-400">Since:</span>
-                        <span className="text-sm text-gray-900 dark:text-white">{serviceStatus.active.since}</span>
-                      </div>
-                    )}
-                    {serviceStatus.active.duration && (
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-600 dark:text-gray-400">Duration:</span>
-                        <span className="text-sm text-gray-900 dark:text-white">{serviceStatus.active.duration}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {serviceStatus.mainPid && (
-                <div>
-                  <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Main Process</div>
-                  <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-lg space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-sm text-gray-600 dark:text-gray-400">PID:</span>
-                      <span className="text-sm font-mono text-gray-900 dark:text-white">{serviceStatus.mainPid.pid}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm text-gray-600 dark:text-gray-400">Command:</span>
-                      <span className="text-sm font-mono text-gray-900 dark:text-white truncate ml-2">{serviceStatus.mainPid.command}</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {(serviceStatus.memory || serviceStatus.cpu || serviceStatus.tasks) && (
-                <div>
-                  <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Resource Usage</div>
-                  <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-lg space-y-2">
-                    {serviceStatus.memory && (
-                      <>
-                        <div className="flex justify-between">
-                          <span className="text-sm text-gray-600 dark:text-gray-400">Memory (Current):</span>
-                          <span className="text-sm font-medium text-gray-900 dark:text-white">{serviceStatus.memory.current}</span>
-                        </div>
-                        {serviceStatus.memory.peak && (
-                          <div className="flex justify-between">
-                            <span className="text-sm text-gray-600 dark:text-gray-400">Memory (Peak):</span>
-                            <span className="text-sm font-medium text-gray-900 dark:text-white">{serviceStatus.memory.peak}</span>
-                          </div>
-                        )}
-                      </>
-                    )}
-                    {serviceStatus.cpu && serviceStatus.cpu.usage && (
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-600 dark:text-gray-400">CPU Time:</span>
-                        <span className="text-sm font-medium text-gray-900 dark:text-white">{serviceStatus.cpu.usage}</span>
-                      </div>
-                    )}
-                    {serviceStatus.tasks && (
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-600 dark:text-gray-400">Tasks:</span>
-                        <span className="text-sm font-medium text-gray-900 dark:text-white">{serviceStatus.tasks.current} / {serviceStatus.tasks.limit}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {serviceStatus.cgroup && serviceStatus.cgroup.processes && serviceStatus.cgroup.processes.length > 0 && (
-                <div>
-                  <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Process Tree</div>
-                  <div className="bg-gray-50 dark:bg-gray-800/50 p-3 rounded-lg">
-                    <div className="space-y-1 max-h-32 overflow-y-auto">
-                      {serviceStatus.cgroup.processes.map((process, index) => (
-                        <div key={index} className="flex justify-between text-xs">
-                          <span className="font-mono text-gray-600 dark:text-gray-400">{process.pid}</span>
-                          <span className="font-mono text-gray-900 dark:text-white truncate ml-2">{process.command}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
+          <ComponentCard title="Service Logs" desc="Real-time systemctl service output (journalctl)">
+            <div ref={el => { if (el) el.scrollTop = el.scrollHeight; }} className="bg-black text-green-400 font-mono text-sm p-4 rounded-lg h-96 overflow-y-auto">
+              {logs ? <pre className="whitespace-pre-wrap">{logs}</pre> : <div className="text-gray-500">No logs available</div>}
             </div>
           </ComponentCard>
-        )}
+        </TabsContent>
 
-        {/* Environment Variables */}
-        <ComponentCard title="Environment Variables" desc="Manage application environment variables">
-          <div className="space-y-4">
-            <div className="flex justify-between items-center">
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                Configure environment variables for your application
-              </p>
-              <Button
-                onClick={() => openEnvModal()}
-                disabled={envLoading}
-                variant="primary"
-                size="sm"
-              >
-                Add Variable
+        <TabsContent value="deployments" className="space-y-6 mt-0">
+           <div className="flex justify-between items-center mb-4">
+             <div>
+               <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Deployment History</h2>
+               <p className="text-sm text-gray-500">View and manage deployments for this app</p>
+             </div>
+             <div className="flex items-center space-x-3">
+               <Button onClick={redeployApp} disabled={!socket || actionLoading === 'redeploy'} variant="primary" className="bg-orange-600 hover:bg-orange-700 disabled:bg-orange-300">
+                 Redeploy from Git
+               </Button>
+               <Button onClick={clearDeployHistory} variant="outline" disabled={actionLoading === 'clear-history'} className="text-red-600 border-red-300 hover:bg-red-50">
+                 <FaTrash className="mr-2"/> Clear History
+               </Button>
+             </div>
+           </div>
+           <DeploymentQueue appName={appName} refreshTrigger={redeployTrigger} />
+        </TabsContent>
+
+        <TabsContent value="domains" className="space-y-6 mt-0">
+          <ComponentCard title="Domains" desc="Manage custom domains">
+            <div className="mb-4">
+              <Button onClick={() => setShowAddDomainModal(true)} variant="primary" size="sm">
+                <FaPlus className="mr-2" /> Add Domain
               </Button>
             </div>
-
-            {envVars.length === 0 ? (
+            
+            {domains.length === 0 ? (
               <div className="text-center py-8">
-                <p className="text-gray-500 dark:text-gray-400">No environment variables configured</p>
-                <Button
-                  onClick={() => openEnvModal()}
-                  disabled={envLoading}
-                  variant="outline"
-                  size="sm"
-                  className="mt-2"
-                >
-                  Add Your First Variable
-                </Button>
+                <div className="text-gray-500 dark:text-gray-400">No domains configured</div>
               </div>
             ) : (
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {envVars.map((envVar) => (
-                  <div
-                    key={envVar.id}
-                    className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center space-x-2">
-                        <span className="text-sm font-medium text-gray-900 dark:text-white">
-                          {envVar.key}
-                        </span>
-                        <span className="text-xs text-gray-500 dark:text-gray-400">
-                          =
-                        </span>
-                        <span className="text-sm text-gray-600 dark:text-gray-300 truncate">
-                          {envVar.value.length > 50 ? `${envVar.value.substring(0, 50)}...` : envVar.value}
-                        </span>
+              <div className="space-y-4">
+                {domains.map((domain) => (
+                  <div key={domain.id} className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg flex items-center justify-between">
+                    <div>
+                      <h3 className="font-medium text-gray-900 dark:text-white">
+                        {domain.ssl_enabled ? (domain.domain.startsWith(':') ? 'https://'+ systemInfo?.host + domain.domain : domain.domain) : (domain.domain.startsWith(':') ? 'http://'+ systemInfo?.host + domain.domain : `http://${domain.domain}`)}
+                      </h3>
+                      <div className="flex items-center space-x-2 mt-1">
+                        {domain.ssl_enabled && <Badge color="success" variant="light" size="sm">SSL Enabled</Badge>}
+                        {domain.is_primary && <Badge color="info" variant="light" size="sm">Primary</Badge>}
                       </div>
                     </div>
-                    <div className="flex items-center space-x-2 ml-2">
-                      <Button
-                        onClick={() => openEnvModal(envVar)}
-                        disabled={envLoading}
-                        variant="outline"
-                        size="sm"
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        onClick={() => deleteEnvVar(envVar.key)}
-                        disabled={envLoading}
-                        variant="outline"
-                        size="sm"
-                        className="text-red-600 hover:text-red-700 border-red-300 hover:border-red-400"
-                      >
-                        Delete
+                    <div className="flex items-center space-x-2">
+                      <Button onClick={() => removeDomain(domain.id, domain.domain)} disabled={actionLoading === `remove-${domain.id}`} variant="outline" size="sm">
+                         <FaTrash className="text-red-600" />
                       </Button>
                     </div>
                   </div>
                 ))}
               </div>
             )}
-          </div>
-        </ComponentCard>
+          </ComponentCard>
+        </TabsContent>
 
-        {/* Actions */}
-        <ComponentCard title="Actions" desc="Manage your application">
-          <div className="grid grid-cols-2 gap-3">
-            <Button
-              onClick={() => executeAction('start', 'systemctl:start', 'Service started successfully')}
-              disabled={!socket || actionLoading === 'start' || serviceStatus?.status === 'active'}
-              variant="primary"
-              className="bg-green-600 hover:bg-green-700 disabled:bg-green-300"
-            >
-              {actionLoading === 'start' ? 'Starting...' : 'Start'}
-            </Button>
-            <Button
-              onClick={() => executeAction('stop', 'systemctl:stop', 'Service stopped successfully')}
-              disabled={!socket || actionLoading === 'stop' || serviceStatus?.status === 'inactive'}
-              variant="primary"
-              className="bg-red-600 hover:bg-red-700 disabled:bg-red-300"
-            >
-              {actionLoading === 'stop' ? 'Stopping...' : 'Stop'}
-            </Button>
-            <Button
-              onClick={() => executeAction('restart', 'systemctl:restart', 'Service restarted successfully')}
-              disabled={!socket || actionLoading === 'restart'}
-              variant="primary"
-              className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300"
-            >
-              {actionLoading === 'restart' ? 'Restarting...' : 'Restart'}
-            </Button>
-            <Button
-              onClick={() => executeAction('enable', 'systemctl:enable', 'Auto-start enabled successfully')}
-              disabled={!socket || actionLoading === 'enable' || serviceStatus?.enabled}
-              variant="primary"
-              className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300"
-            >
-              {actionLoading === 'enable' ? 'Enabling...' : 'Enable Auto-start'}
-            </Button>
-            <Button
-              onClick={() => executeAction('disable', 'systemctl:disable', 'Auto-start disabled successfully')}
-              disabled={!socket || actionLoading === 'disable' || !serviceStatus?.enabled}
-              variant="primary"
-              className="bg-yellow-600 hover:bg-yellow-700 disabled:bg-yellow-300"
-            >
-              {actionLoading === 'disable' ? 'Disabling...' : 'Disable Auto-start'}
-            </Button>
-            <Button
-              onClick={fetchAppData}
-              disabled={!socket || loading}
-              variant="primary"
-              className="bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300"
-            >
-              {loading ? 'Refreshing...' : 'Refresh Status'}
-            </Button>
-          </div>
+        <TabsContent value="settings" className="space-y-6 mt-0">
           
-          <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700 space-y-3">
-            <Button
-              onClick={redeployApp}
-              disabled={!socket || actionLoading === 'redeploy'}
-              variant="primary"
-              className="w-full bg-orange-600 hover:bg-orange-700 disabled:bg-orange-300"
-            >
-              {actionLoading === 'redeploy' ? 'Redeploying...' : 'Redeploy from Git'}
-            </Button>
-            <Button
-              onClick={deleteApp}
-              disabled={!socket || actionLoading === 'delete'}
-              variant="primary"
-              className="w-full bg-red-600 hover:bg-red-700 disabled:bg-red-300"
-            >
-              {actionLoading === 'delete' ? 'Deleting...' : 'Delete Application'}
-            </Button>
-          </div>
-        </ComponentCard>
-      </div>
+          {/* Application Settings */}
+          <ComponentCard title="Application Settings" desc="Update repository and build configuration">
+            <div className="space-y-4">
+              <div>
+                <Label>Git Branch</Label>
+                <input 
+                  type="text" 
+                  value={appConfigForm.branch} 
+                  onChange={(e) => setAppConfigForm(prev => ({ ...prev, branch: e.target.value }))} 
+                  placeholder="e.g., main or master" 
+                  className="h-11 w-full rounded-lg border appearance-none px-4 py-2.5 text-sm shadow-theme-xs placeholder:text-gray-400 focus:outline-none focus:ring-3 dark:bg-gray-900 dark:text-white/90 dark:placeholder:text-white/30 dark:focus:border-brand-800 bg-transparent text-gray-800 border-gray-300 focus:border-brand-300 focus:ring-brand-500/10 dark:border-gray-700 mt-1"
+                />
+              </div>
+              <div>
+                <Label>Install Command</Label>
+                <input 
+                  type="text" 
+                  value={appConfigForm.installCommand} 
+                  onChange={(e) => setAppConfigForm(prev => ({ ...prev, installCommand: e.target.value }))} 
+                  placeholder="e.g., npm install" 
+                  className="h-11 w-full rounded-lg border appearance-none px-4 py-2.5 text-sm shadow-theme-xs placeholder:text-gray-400 focus:outline-none focus:ring-3 dark:bg-gray-900 dark:text-white/90 dark:placeholder:text-white/30 dark:focus:border-brand-800 bg-transparent text-gray-800 border-gray-300 focus:border-brand-300 focus:ring-brand-500/10 dark:border-gray-700 mt-1"
+                />
+              </div>
+              <div>
+                <Label>Build Command</Label>
+                <input 
+                  type="text" 
+                  value={appConfigForm.buildCommand} 
+                  onChange={(e) => setAppConfigForm(prev => ({ ...prev, buildCommand: e.target.value }))} 
+                  placeholder="e.g., npm run build" 
+                  className="h-11 w-full rounded-lg border appearance-none px-4 py-2.5 text-sm shadow-theme-xs placeholder:text-gray-400 focus:outline-none focus:ring-3 dark:bg-gray-900 dark:text-white/90 dark:placeholder:text-white/30 dark:focus:border-brand-800 bg-transparent text-gray-800 border-gray-300 focus:border-brand-300 focus:ring-brand-500/10 dark:border-gray-700 mt-1"
+                />
+              </div>
+              <div>
+                <Label>Start Command</Label>
+                <input 
+                  type="text" 
+                  value={appConfigForm.startCommand} 
+                  onChange={(e) => setAppConfigForm(prev => ({ ...prev, startCommand: e.target.value }))} 
+                  placeholder="e.g., npm start" 
+                  className="h-11 w-full rounded-lg border appearance-none px-4 py-2.5 text-sm shadow-theme-xs placeholder:text-gray-400 focus:outline-none focus:ring-3 dark:bg-gray-900 dark:text-white/90 dark:placeholder:text-white/30 dark:focus:border-brand-800 bg-transparent text-gray-800 border-gray-300 focus:border-brand-300 focus:ring-brand-500/10 dark:border-gray-700 mt-1"
+                />
+              </div>
+              <div className="flex justify-end pt-2">
+                <Button 
+                  onClick={updateAppConfig} 
+                  disabled={actionLoading === 'update-config'} 
+                  variant="primary"
+                >
+                  {actionLoading === 'update-config' ? 'Saving...' : 'Save Changes'}
+                </Button>
+              </div>
+            </div>
+          </ComponentCard>
 
-      {/* Logs */}
-      <ComponentCard title="Service Logs" desc="Real-time systemctl service output (journalctl)">
-        <div ref={el => { if (el) el.scrollTop = el.scrollHeight; }} className="bg-black text-green-400 font-mono text-sm p-4 rounded-lg h-96 overflow-y-auto">
-          {logs ? (
-            <pre className="whitespace-pre-wrap">{logs}</pre>
-          ) : (
-            <div className="text-gray-500">No logs available</div>
-          )}
-        </div>
-      </ComponentCard>
+          {/* Continuous Deployment */}
+          <ComponentCard title="Continuous Deployment" desc="Set up GitHub Push-to-Deploy">
+             <div className="space-y-4">
+               {appDetails?.webhook_token ? (
+                 <div>
+                   <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                     Your webhook URL is active. Add this URL and secret to your GitHub repository settings under "Webhooks". Ensure the Content type is set to <code>application/json</code>.
+                   </p>
+                   <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg space-y-3">
+                     <div>
+                       <Label>Payload URL</Label>
+                       <div className="flex mt-1">
+                         <input type="text" readOnly value={webhookUrl} className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-l-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white" />
+                         <Button onClick={() => navigator.clipboard.writeText(webhookUrl)} variant="outline" className="rounded-l-none border-l-0">Copy</Button>
+                       </div>
+                     </div>
+                     <div>
+                       <Label>Secret</Label>
+                       <div className="flex mt-1">
+                         <input type="text" readOnly value={appDetails.webhook_token} className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-l-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-sm" />
+                         <Button onClick={() => navigator.clipboard.writeText(appDetails.webhook_token as string)} variant="outline" className="rounded-l-none border-l-0">Copy</Button>
+                       </div>
+                     </div>
+                   </div>
+                   <div className="mt-4 flex gap-3">
+                     <Button onClick={generateWebhook} disabled={actionLoading === 'webhook-generate'} variant="outline" size="sm">Regenerate Secret</Button>
+                     <Button onClick={removeWebhook} disabled={actionLoading === 'webhook-remove'} variant="outline" size="sm" className="text-red-600">Remove Webhook</Button>
+                   </div>
+                 </div>
+               ) : (
+                 <div>
+                   <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                     Enable push-to-deploy to automatically rebuild your app when you push to the configured branch.
+                   </p>
+                   <Button onClick={generateWebhook} disabled={actionLoading === 'webhook-generate'} variant="primary">
+                     <FaGithub className="mr-2" /> Enable GitHub Webhooks
+                   </Button>
+                 </div>
+               )}
+             </div>
+          </ComponentCard>
 
-      {/* Environment Variable Modal */}
-      <Modal
-        isOpen={showEnvModal}
-        onClose={closeEnvModal}
-      >
+          {/* Environment Variables */}
+          <ComponentCard title="Environment Variables" desc="Manage application environment variables">
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <Button onClick={() => openEnvModal()} disabled={envLoading} variant="primary" size="sm">Add Variable</Button>
+              </div>
+
+              {envVars.length === 0 ? (
+                <div className="text-center py-4 text-gray-500">No environment variables configured</div>
+              ) : (
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {envVars.map((envVar) => (
+                    <div key={envVar.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800/50 rounded-lg">
+                      <div className="flex items-center space-x-2 flex-1 min-w-0">
+                        <span className="text-sm font-medium text-gray-900 dark:text-white">{envVar.key}</span>
+                        <span className="text-xs text-gray-500">=</span>
+                        <span className="text-sm text-gray-600 dark:text-gray-300 truncate">{envVar.value}</span>
+                      </div>
+                      <div className="flex space-x-2 ml-2">
+                        <Button onClick={() => openEnvModal(envVar)} disabled={envLoading} variant="outline" size="sm">Edit</Button>
+                        <Button onClick={() => deleteEnvVar(envVar.key)} disabled={envLoading} variant="outline" size="sm" className="text-red-600">Delete</Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </ComponentCard>
+
+          {/* Actions */}
+          <ComponentCard title="Actions" desc="Manage your application state">
+            <div className="grid grid-cols-3 gap-3">
+              <Button onClick={() => executeAction('start', 'systemctl:start', 'Service started successfully')} disabled={!socket || actionLoading === 'start' || serviceStatus?.status === 'active'} variant="primary" className="bg-green-600 hover:bg-green-700 disabled:bg-green-300">Start</Button>
+              <Button onClick={() => executeAction('stop', 'systemctl:stop', 'Service stopped successfully')} disabled={!socket || actionLoading === 'stop' || serviceStatus?.status === 'inactive'} variant="primary" className="bg-red-600 hover:bg-red-700 disabled:bg-red-300">Stop</Button>
+              <Button onClick={() => executeAction('restart', 'systemctl:restart', 'Service restarted successfully')} disabled={!socket || actionLoading === 'restart'} variant="primary" className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300">Restart</Button>
+            </div>
+          </ComponentCard>
+
+          {/* Danger Zone */}
+          <ComponentCard title="Danger Zone" desc="Destructive actions for this application">
+             <div className="p-4 border border-red-200 dark:border-red-800/50 bg-red-50 dark:bg-red-900/10 rounded-lg">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h3 className="text-base font-semibold text-red-800 dark:text-red-400">Delete Application</h3>
+                    <p className="text-sm text-red-600 dark:text-red-300 mt-1">Permanently remove this application and all associated data.</p>
+                  </div>
+                  <Button onClick={deleteApp} disabled={!socket || actionLoading === 'delete'} variant="primary" className="bg-red-600 hover:bg-red-700 text-white border-0">
+                    {actionLoading === 'delete' ? 'Deleting...' : 'Delete Application'}
+                  </Button>
+                </div>
+             </div>
+          </ComponentCard>
+
+        </TabsContent>
+      </Tabs>
+
+      {/* Add Domain Modal */}
+      <Modal isOpen={showAddDomainModal} onClose={() => { setShowAddDomainModal(false); setNewDomain({ domain: '', sslEnabled: true }); setError(null); }}>
         <div className="space-y-4">
-          <div className="mb-6">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-              {editingEnvVar ? 'Edit Environment Variable' : 'Add Environment Variable'}
-            </h3>
-          </div>
-
+          <div className="mb-6"><h3 className="text-lg font-semibold text-gray-900 dark:text-white">Add New Domain</h3></div>
           <div>
-            <Label htmlFor="env-key">Variable Name</Label>
-            <input
-              id="env-key"
-              name="key"
-              type="text"
-              value={envFormData.key}
-              onChange={handleEnvFormChange}
-              placeholder="e.g., NODE_ENV, DATABASE_URL"
-              disabled={envLoading || !!editingEnvVar}
-              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-brand-500 focus:border-brand-500 disabled:bg-gray-100 disabled:cursor-not-allowed dark:bg-gray-800 dark:border-gray-600 dark:text-white dark:placeholder-gray-500"
-            />
-            {editingEnvVar && (
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Variable name cannot be changed when editing
-              </p>
-            )}
+            <Label htmlFor="domain-input">Domain *</Label>
+            <InputField id="domain-input" type="text" defaultValue={newDomain.domain} onChange={(e) => setNewDomain(prev => ({ ...prev, domain: e.target.value }))} placeholder="example.com" />
           </div>
-
-          <div>
-            <Label htmlFor="env-value">Variable Value</Label>
-            <input
-              id="env-value"
-              name="value"
-              type="text"
-              value={envFormData.value}
-              onChange={handleEnvFormChange}
-              placeholder="Enter the value"
-              disabled={envLoading}
-              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-brand-500 focus:border-brand-500 disabled:bg-gray-100 disabled:cursor-not-allowed dark:bg-gray-800 dark:border-gray-600 dark:text-white dark:placeholder-gray-500"
-            />
+          <div className="flex items-center justify-between">
+            <Label>Automatic SSL Configuration</Label>
+            <button onClick={() => setNewDomain(prev => ({ ...prev, sslEnabled: !prev.sslEnabled }))} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${newDomain.sslEnabled ? 'bg-blue-600' : 'bg-gray-200'}`}>
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${newDomain.sslEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+            </button>
           </div>
-
           <div className="flex justify-end space-x-3 pt-4">
-            <Button
-              onClick={closeEnvModal}
-              disabled={envLoading}
-              variant="outline"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={saveEnvVar}
-              disabled={envLoading || !envFormData.key.trim()}
-              variant="primary"
-            >
-              {envLoading 
-                ? (editingEnvVar ? 'Updating...' : 'Adding...') 
-                : (editingEnvVar ? 'Update Variable' : 'Add Variable')
-              }
-            </Button>
+            <Button onClick={() => setShowAddDomainModal(false)} variant="outline">Cancel</Button>
+            <Button onClick={addDomain} disabled={actionLoading === 'add-domain' || !newDomain.domain} variant="primary">Add Domain</Button>
           </div>
         </div>
       </Modal>
+
+      {/* Environment Variable Modal */}
+      <Modal isOpen={showEnvModal} onClose={closeEnvModal}>
+        <div className="space-y-4">
+          <div className="mb-6"><h3 className="text-lg font-semibold text-gray-900 dark:text-white">{editingEnvVar ? 'Edit Environment Variable' : 'Add Environment Variable'}</h3></div>
+          <div>
+            <Label htmlFor="env-key">Variable Name</Label>
+            <input id="env-key" name="key" type="text" value={envFormData.key} onChange={handleEnvFormChange} disabled={envLoading || !!editingEnvVar} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-brand-500 dark:bg-gray-800 dark:border-gray-600 dark:text-white" />
+          </div>
+          <div>
+            <Label htmlFor="env-value">Variable Value</Label>
+            <input id="env-value" name="value" type="text" value={envFormData.value} onChange={handleEnvFormChange} disabled={envLoading} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-brand-500 dark:bg-gray-800 dark:border-gray-600 dark:text-white" />
+          </div>
+          <div className="flex justify-end space-x-3 pt-4">
+            <Button onClick={closeEnvModal} disabled={envLoading} variant="outline">Cancel</Button>
+            <Button onClick={saveEnvVar} disabled={envLoading || !envFormData.key.trim()} variant="primary">{envLoading ? (editingEnvVar ? 'Updating...' : 'Adding...') : (editingEnvVar ? 'Update Variable' : 'Add Variable')}</Button>
+          </div>
+        </div>
+      </Modal>
+
     </div>
   );
 }
