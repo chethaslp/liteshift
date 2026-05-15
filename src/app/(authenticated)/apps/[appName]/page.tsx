@@ -13,7 +13,7 @@ import { Modal } from "@/components/ui/modal";
 import InputField from "@/components/form/input/InputField";
 import Label from "@/components/form/Label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs/Tabs";
-import { FaTrash, FaPlus, FaExternalLinkAlt, FaGithub, FaCog, FaCheck, FaTimes, FaRedo } from "react-icons/fa";
+import { FaTrash, FaPlus, FaExternalLinkAlt, FaGithub, FaCog, FaCheck, FaTimes, FaRedo, FaDownload } from "react-icons/fa";
 import DeploymentQueue from "@/components/dashboard/DeploymentQueue";
 
 interface EnvVar {
@@ -275,6 +275,34 @@ export default function AppDetailPage() {
     }
   };
 
+  // Export
+  const exportAppConfig = () => {
+    if (!appDetails) return;
+    
+    const exportData = {
+      name: appDetails.name,
+      repository_url: appDetails.repository_url,
+      branch: appDetails.branch,
+      runtime: appDetails.runtime,
+      install_command: appDetails.install_command,
+      build_command: appDetails.build_command,
+      start_command: appDetails.start_command,
+      port: appDetails.port,
+      env_vars: envVars.map(env => ({ key: env.key, value: env.value })),
+      domains: domains.map(d => ({ domain: d.domain, ssl_enabled: d.ssl_enabled }))
+    };
+
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData, null, 2));
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href", dataStr);
+    downloadAnchorNode.setAttribute("download", `${appDetails.name}-config.json`);
+    document.body.appendChild(downloadAnchorNode); // required for firefox
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+    
+    setSuccess('Application configuration exported successfully');
+  };
+
   // Domains
   const addDomain = async () => {
     if (!newDomain.domain) {
@@ -473,15 +501,28 @@ export default function AppDetailPage() {
             <ComponentCard title="Performance" desc="Resource usage details">
                <div className="grid grid-cols-2 gap-4">
                  <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                   <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">Peak Memory</div>
+                   <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">Current Memory</div>
                    <div className="text-xl font-bold text-gray-900 dark:text-white">
-                     {serviceStatus?.memory?.peak || serviceStatus?.memory?.current || 'N/A'}
+                     {serviceStatus?.memory?.current || 'N/A'}
                    </div>
+                   <div className="text-xs text-gray-400 mt-1">Peak: {serviceStatus?.memory?.peak || 'N/A'}</div>
                  </div>
                  <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
                    <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">CPU Time</div>
                    <div className="text-xl font-bold text-gray-900 dark:text-white">
-                     {serviceStatus?.cpu?.usage || 'N/A'}
+                     {serviceStatus?.cpu?.usage || '0%'}
+                   </div>
+                 </div>
+                 <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                   <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">Uptime</div>
+                   <div className="text-xl font-bold text-gray-900 dark:text-white">
+                     {serviceStatus?.uptime || serviceStatus?.active?.duration || '0s'}
+                   </div>
+                 </div>
+                 <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                   <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">Restarts</div>
+                   <div className="text-xl font-bold text-gray-900 dark:text-white">
+                     {serviceStatus?.restarts !== undefined ? serviceStatus.restarts : 'N/A'}
                    </div>
                  </div>
                </div>
@@ -493,6 +534,12 @@ export default function AppDetailPage() {
                   <span className="text-sm text-gray-500 dark:text-gray-400">Deployed URL</span>
                   <a href={domains[0] ? `http${domains[0].ssl_enabled ? 's' : ''}://${domains[0].domain}` : '#'} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-brand-600 flex items-center hover:underline">
                     {domains[0] ? domains[0].domain : 'No domains mapped'} <FaExternalLinkAlt className="ml-1 text-xs" />
+                  </a>
+                </div>
+                <div className="flex justify-between items-center pb-2 border-b border-gray-100 dark:border-gray-800">
+                  <span className="text-sm text-gray-500 dark:text-gray-400">Local URL</span>
+                  <a href={`http://${systemInfo?.host || 'localhost'}:${appDetails?.port}`} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-brand-600 flex items-center hover:underline">
+                    http://{systemInfo?.host || 'localhost'}:{appDetails?.port} <FaExternalLinkAlt className="ml-1 text-xs" />
                   </a>
                 </div>
                 <div className="flex justify-between items-center pb-2 border-b border-gray-100 dark:border-gray-800">
@@ -725,6 +772,20 @@ export default function AppDetailPage() {
               <Button onClick={() => executeAction('stop', 'pm:stop', 'Service stopped successfully')} disabled={!socket || actionLoading === 'stop' || serviceStatus?.status === 'inactive' || serviceStatus?.status === 'stopped'} variant="primary" className="bg-red-600 hover:bg-red-700 disabled:bg-red-300">Stop</Button>
               <Button onClick={() => executeAction('restart', 'pm:restart', 'Service restarted successfully')} disabled={!socket || actionLoading === 'restart'} variant="primary" className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300">Restart</Button>
             </div>
+          </ComponentCard>
+
+          {/* Export Settings */}
+          <ComponentCard title="Export Configuration" desc="Export app configuration for backup or migration">
+             <div className="flex justify-between items-center bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg border border-gray-200 dark:border-gray-700">
+               <div>
+                 <h3 className="text-sm font-medium text-gray-900 dark:text-white">Export App Data</h3>
+                 <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Download a JSON file containing all settings, environment variables, and domains for this app.</p>
+               </div>
+               <Button onClick={exportAppConfig} variant="outline" className="flex items-center space-x-2 whitespace-nowrap ml-4">
+                 <FaDownload className="text-gray-500" />
+                 <span>Export JSON</span>
+               </Button>
+             </div>
           </ComponentCard>
 
           {/* Danger Zone */}

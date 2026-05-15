@@ -8,7 +8,26 @@ import { useSocketContext } from "@/context/SocketContext";
 
 export default function UserDropdown() {
   const [isOpen, setIsOpen] = useState(false);
-  const { user, systemInfo } = useSocketContext();
+  const [isUpdating, setIsUpdating] = useState(false);
+  const { socket, user, systemInfo } = useSocketContext();
+
+  function handleUpdateLiteshift() {
+    if (!socket || isUpdating) return;
+    if (!confirm("Are you sure you want to update Liteshift? The server will restart automatically.")) return;
+    
+    setIsUpdating(true);
+    socket.emitWithAck('system:update', {}).then((response: any) => {
+      if (response.success) {
+        alert(response.message);
+      } else {
+        alert("Failed to update: " + response.error);
+        setIsUpdating(false);
+      }
+    }).catch(() => {
+      alert("Failed to update: Network error");
+      setIsUpdating(false);
+    });
+  }
 
 function toggleDropdown(e: React.MouseEvent<HTMLButtonElement, MouseEvent>) {
   e.stopPropagation();
@@ -93,6 +112,31 @@ function toggleDropdown(e: React.MouseEvent<HTMLButtonElement, MouseEvent>) {
               </svg>
               Edit profile
             </DropdownItem>
+          </li>
+          <li>
+            <button
+              onClick={handleUpdateLiteshift}
+              disabled={isUpdating}
+              className="flex w-full items-center gap-3 px-3 py-2 font-medium text-gray-700 rounded-lg group text-theme-sm hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300 disabled:opacity-50"
+            >
+              <svg
+                className="fill-gray-500 group-hover:fill-gray-700 dark:fill-gray-400 dark:group-hover:fill-gray-300"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="M12 4v2m0 12v2M4 12H2m20 0h-2m-2.828-5.657l-1.414 1.414M6.243 17.757l-1.414 1.414m0-11.314l1.414 1.414m11.314 8.486l-1.414-1.414M12 15a3 3 0 100-6 3 3 0 000 6z"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              {isUpdating ? "Updating..." : "Update Liteshift"}
+            </button>
           </li>
         </ul>
 

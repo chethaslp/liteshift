@@ -302,6 +302,8 @@ export default function CaddyPage() {
         </div>
       </div>
     );
+  }
+  
   if (systemInfo?.reverse_proxy === 'cloudflare') {
     return (
       <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">

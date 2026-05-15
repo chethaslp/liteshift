@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import ComponentCard from "@/components/common/ComponentCard";
 import Button from "@/components/ui/button/Button";
@@ -14,6 +14,7 @@ import Select from "@/components/form/Select";
 import DeploymentQueue from "@/components/dashboard/DeploymentQueue";
 import { useSocketContext } from "@/context/SocketContext";
 import { App } from "@/lib/models";
+import { FaFileImport } from "react-icons/fa";
 
 export default function AppsPage() {
   const [apps, setApps] = useState<App[]>([]);
@@ -46,6 +47,51 @@ export default function AppsPage() {
   const [deploymentType, setDeploymentType] = useState<'git' | 'file'>('git');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [runtimeDetecting, setRuntimeDetecting] = useState(false);
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImportConfig = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const config = JSON.parse(e.target?.result as string);
+        setFormData(prev => ({
+          ...prev,
+          appName: config.name || prev.appName,
+          repository: config.repo_url || prev.repository,
+          branch: config.branch || prev.branch,
+          runtime: config.runtime || prev.runtime,
+          installCommand: config.install_command || prev.installCommand,
+          buildCommand: config.build_command || prev.buildCommand,
+          startCommand: config.start_command || prev.startCommand,
+          envVars: config.env_vars && config.env_vars.length > 0 
+            ? config.env_vars.map((env: any) => `${env.key}=${env.value}`).join('\n') 
+            : prev.envVars,
+        }));
+        
+        if (config.repo_url) {
+           setDeploymentType('git');
+           validateRepository(config.repo_url);
+        } else {
+           setDeploymentType('file');
+        }
+        
+        setDeploymentSuccess('Configuration imported successfully. Please review the form below.');
+        setDeploymentError(null);
+      } catch (err) {
+        setDeploymentError(['Import Error', 'Failed to parse JSON file']);
+      }
+    };
+    reader.readAsText(file);
+    
+    // Reset input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
 
   const fetchApps = async () => {
     if (!socket) return;
@@ -575,23 +621,40 @@ export default function AppsPage() {
                       </h1>
                     </div>
                   </div>
-                  <button
-                    onClick={() => {
-                      setShowCreateModal(false);
-                      setDeploymentError(null);
-                      setDeploymentSuccess(null);
-                      setQueueId(null);
-                      setRepoValid(false);
-                      setBranches([]);
-                      setSelectedFile(null);
-                      setDeploymentType('git');
-                    }}
-                    className="flex items-center justify-center w-10 h-10 rounded-xl bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 transition-colors"
-                  >
-                    <svg className="w-5 h-5 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
+                  <div className="flex items-center space-x-4">
+                    <Button
+                      onClick={() => fileInputRef.current?.click()}
+                      variant="outline"
+                      className="flex items-center space-x-2"
+                    >
+                      <FaFileImport className="text-gray-500" />
+                      <span>Import Config</span>
+                    </Button>
+                    <input
+                      type="file"
+                      accept=".json"
+                      ref={fileInputRef}
+                      onChange={handleImportConfig}
+                      className="hidden"
+                    />
+                    <button
+                      onClick={() => {
+                        setShowCreateModal(false);
+                        setDeploymentError(null);
+                        setDeploymentSuccess(null);
+                        setQueueId(null);
+                        setRepoValid(false);
+                        setBranches([]);
+                        setSelectedFile(null);
+                        setDeploymentType('git');
+                      }}
+                      className="flex items-center justify-center w-10 h-10 rounded-xl bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 transition-colors"
+                    >
+                      <svg className="w-5 h-5 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
