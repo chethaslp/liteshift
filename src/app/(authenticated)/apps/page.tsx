@@ -61,7 +61,7 @@ export default function AppsPage() {
         setFormData(prev => ({
           ...prev,
           appName: config.name || prev.appName,
-          repository: config.repo_url || prev.repository,
+          repository: config.repository_url || prev.repository,
           branch: config.branch || prev.branch,
           runtime: config.runtime || prev.runtime,
           installCommand: config.install_command || prev.installCommand,
@@ -72,9 +72,9 @@ export default function AppsPage() {
             : prev.envVars,
         }));
         
-        if (config.repo_url) {
+        if (config.repository_url) {
            setDeploymentType('git');
-           validateRepository(config.repo_url);
+           validateRepository(config.repository_url);
         } else {
            setDeploymentType('file');
         }
