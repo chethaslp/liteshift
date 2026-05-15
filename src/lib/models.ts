@@ -106,23 +106,31 @@ export interface Setting {
 }
 
 /**
- * Enhanced SystemD Service Status model from systemctl:status response
+ * Enhanced Process Status model from pm:status response
  */
 export interface ServiceStatus {
     name: string;
-    status: 'active' | 'inactive' | 'failed' | 'unknown';
+    status: 'active' | 'inactive' | 'failed' | 'unknown' | 'online' | 'stopped' | 'errored' | 'launching' | 'stopping';
     enabled: boolean;
     description: string;
     runtime: 'node' | 'python' | 'bun';
     cwd?: string;
-    // Enhanced parsed systemctl status information
-    loaded: {
+    
+    // Process ID (available in PM2, sometimes in SystemD)
+    pid?: number;
+    
+    // PM2 specific properties
+    uptime?: string;
+    restarts?: number;
+
+    // SystemD specific parsed information
+    loaded?: {
         state: 'loaded' | 'not-found' | 'bad-setting' | 'error' | 'masked';
         path: string;
         enabled: 'enabled' | 'disabled' | 'static' | 'masked';
         preset: 'enabled' | 'disabled';
     };
-    active: {
+    active?: {
         state: 'active' | 'inactive' | 'failed' | 'activating' | 'deactivating';
         subState: string;
         since: string;

@@ -43,7 +43,7 @@ export default function AppLogs({ appName }: AppLogsProps) {
     
     try {
       setLoading(true);
-      const response = await socket.emitWithAck("systemctl:stream-logs", { appName });
+      const response = await socket.emitWithAck("pm:stream-logs", { appName });
       if (response.success) {
         setIsStreaming(true);
         setError(null);
@@ -62,7 +62,7 @@ export default function AppLogs({ appName }: AppLogsProps) {
     if (!socket || !isStreaming) return;
     
     try {
-      const response = await socket.emitWithAck("systemctl:stop-stream", { appName });
+      const response = await socket.emitWithAck("pm:stop-stream", { appName });
       if (response.success) {
         setIsStreaming(false);
         setError(null);
@@ -80,7 +80,7 @@ export default function AppLogs({ appName }: AppLogsProps) {
     
     try {
       setLoading(true);
-      const response = await socket.emitWithAck("systemctl:logs", { appName, lines: 100 });
+      const response = await socket.emitWithAck("pm:logs", { appName, lines: 100 });
       if (response.success) {
         setLogs(response.data.logs);
         setError(null);
@@ -99,7 +99,7 @@ export default function AppLogs({ appName }: AppLogsProps) {
     if (!socket) return;
     
     try {
-      const response = await socket.emitWithAck("systemctl:logs", { appName, lines: 10000 });
+      const response = await socket.emitWithAck("pm:logs", { appName, lines: 10000 });
       if (response.success) {
         const blob = new Blob([response.data.logs], { type: 'text/plain' });
         const url = window.URL.createObjectURL(blob);
@@ -130,7 +130,7 @@ export default function AppLogs({ appName }: AppLogsProps) {
     fetchRecentLogs();
     
     // Set up socket event listeners
-    socket.on("systemctl:log-stream", (data: { appName: string; data: string; timestamp: string }) => {
+    socket.on("pm:log-stream", (data: { appName: string; data: string; timestamp: string }) => {
       if (data.appName === appName) {
         setLogs(prev => prev + data.data);
       }
@@ -151,13 +151,13 @@ export default function AppLogs({ appName }: AppLogsProps) {
     
     return () => {
       // Clean up socket listeners
-      socket.off("systemctl:log-stream");
+      socket.off("pm:log-stream");
       socket.off("logs:stream-ended");
       socket.off("logs:error");
       
       // Stop streaming if active
       if (isStreaming) {
-        socket.emitWithAck("systemctl:stop-stream", { appName }).catch(err => 
+        socket.emitWithAck("pm:stop-stream", { appName }).catch(err => 
           console.error('Error stopping log stream during cleanup:', err)
         );
       }

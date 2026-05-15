@@ -86,14 +86,14 @@ export default function AppDetailPage() {
         return;
       }
 
-      // Fetch systemctl service status
-      const statusResponse = await socket.emitWithAck('systemctl:status', { appName });
+      // Fetch process status
+      const statusResponse = await socket.emitWithAck('pm:status', { appName });
       if (statusResponse.success) {
         setServiceStatus(statusResponse.data.status);
       }
 
       // Fetch logs
-      const logsResponse = await socket.emitWithAck('systemctl:logs', { appName, lines: 100 });
+      const logsResponse = await socket.emitWithAck('pm:logs', { appName, lines: 100 });
       if (logsResponse.success) {
         setLogs(logsResponse.data.logs || '');
       }
@@ -392,8 +392,10 @@ export default function AppDetailPage() {
   const formatDate = (dateString: string) => new Date(dateString).toLocaleString();
   const getStatusBadgeColor = (status: string) => {
     switch (status) {
-      case 'active': return 'success';
-      case 'inactive': return 'error';
+      case 'active': 
+      case 'online': return 'success';
+      case 'inactive': 
+      case 'stopped': return 'error';
       case 'failed': return 'error';
       default: return 'light';
     }
@@ -508,7 +510,7 @@ export default function AppDetailPage() {
             </ComponentCard>
           </div>
 
-          <ComponentCard title="Service Logs" desc="Real-time systemctl service output (journalctl)">
+          <ComponentCard title="Service Logs" desc="Real-time process manager output">
             <div ref={el => { if (el) el.scrollTop = el.scrollHeight; }} className="bg-black text-green-400 font-mono text-sm p-4 rounded-lg h-96 overflow-y-auto">
               {logs ? <pre className="whitespace-pre-wrap">{logs}</pre> : <div className="text-gray-500">No logs available</div>}
             </div>
@@ -701,9 +703,9 @@ export default function AppDetailPage() {
           {/* Actions */}
           <ComponentCard title="Actions" desc="Manage your application state">
             <div className="grid grid-cols-3 gap-3">
-              <Button onClick={() => executeAction('start', 'systemctl:start', 'Service started successfully')} disabled={!socket || actionLoading === 'start' || serviceStatus?.status === 'active'} variant="primary" className="bg-green-600 hover:bg-green-700 disabled:bg-green-300">Start</Button>
-              <Button onClick={() => executeAction('stop', 'systemctl:stop', 'Service stopped successfully')} disabled={!socket || actionLoading === 'stop' || serviceStatus?.status === 'inactive'} variant="primary" className="bg-red-600 hover:bg-red-700 disabled:bg-red-300">Stop</Button>
-              <Button onClick={() => executeAction('restart', 'systemctl:restart', 'Service restarted successfully')} disabled={!socket || actionLoading === 'restart'} variant="primary" className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300">Restart</Button>
+              <Button onClick={() => executeAction('start', 'pm:start', 'Service started successfully')} disabled={!socket || actionLoading === 'start' || serviceStatus?.status === 'active' || serviceStatus?.status === 'online'} variant="primary" className="bg-green-600 hover:bg-green-700 disabled:bg-green-300">Start</Button>
+              <Button onClick={() => executeAction('stop', 'pm:stop', 'Service stopped successfully')} disabled={!socket || actionLoading === 'stop' || serviceStatus?.status === 'inactive' || serviceStatus?.status === 'stopped'} variant="primary" className="bg-red-600 hover:bg-red-700 disabled:bg-red-300">Stop</Button>
+              <Button onClick={() => executeAction('restart', 'pm:restart', 'Service restarted successfully')} disabled={!socket || actionLoading === 'restart'} variant="primary" className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300">Restart</Button>
             </div>
           </ComponentCard>
 
