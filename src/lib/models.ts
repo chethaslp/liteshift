@@ -8,7 +8,8 @@ export interface Credential {
 export interface SystemInfo { 
     paths: { [key: string]: string }, 
     version: string, 
-    host: string 
+    host: string,
+    reverse_proxy?: string
 }
 
 

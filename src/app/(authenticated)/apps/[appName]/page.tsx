@@ -536,38 +536,56 @@ export default function AppDetailPage() {
         </TabsContent>
 
         <TabsContent value="domains" className="space-y-6 mt-0">
-          <ComponentCard title="Domains" desc="Manage custom domains">
-            <div className="mb-4">
-              <Button onClick={() => setShowAddDomainModal(true)} variant="primary" size="sm">
-                <FaPlus className="mr-2" /> Add Domain
-              </Button>
-            </div>
-            
-            {domains.length === 0 ? (
-              <div className="text-center py-8">
-                <div className="text-gray-500 dark:text-gray-400">No domains configured</div>
+          <ComponentCard title="Domains" desc={systemInfo?.reverse_proxy === 'cloudflare' ? "Domains managed via Cloudflare Zero Trust" : "Manage custom domains"}>
+            {systemInfo?.reverse_proxy === 'cloudflare' ? (
+              <div className="p-6 border border-gray-200 dark:border-gray-700 rounded-lg flex flex-col items-center justify-center text-center">
+                <div className="w-12 h-12 bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 rounded-full flex items-center justify-center mb-4">
+                  <FaExternalLinkAlt className="text-xl" />
+                </div>
+                <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">Cloudflare Tunnel Active</h3>
+                <p className="text-gray-500 dark:text-gray-400 max-w-md mx-auto mb-4">
+                  Your server is configured to use Cloudflare Tunnel. Domains and SSL are managed directly from the Cloudflare Zero Trust dashboard.
+                </p>
+                <div className="text-sm bg-gray-50 dark:bg-gray-800 p-3 rounded text-left w-full max-w-md">
+                  <span className="font-semibold block mb-1">Local Address for this app:</span>
+                  <code className="bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded">http://localhost:{appDetails?.port}</code>
+                </div>
               </div>
             ) : (
-              <div className="space-y-4">
-                {domains.map((domain) => (
-                  <div key={domain.id} className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg flex items-center justify-between">
-                    <div>
-                      <h3 className="font-medium text-gray-900 dark:text-white">
-                        {domain.ssl_enabled ? (domain.domain.startsWith(':') ? 'https://'+ systemInfo?.host + domain.domain : domain.domain) : (domain.domain.startsWith(':') ? 'http://'+ systemInfo?.host + domain.domain : `http://${domain.domain}`)}
-                      </h3>
-                      <div className="flex items-center space-x-2 mt-1">
-                        {domain.ssl_enabled && <Badge color="success" variant="light" size="sm">SSL Enabled</Badge>}
-                        {domain.is_primary && <Badge color="info" variant="light" size="sm">Primary</Badge>}
-                      </div>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <Button onClick={() => removeDomain(domain.id, domain.domain)} disabled={actionLoading === `remove-${domain.id}`} variant="outline" size="sm">
-                         <FaTrash className="text-red-600" />
-                      </Button>
-                    </div>
+              <>
+                <div className="mb-4">
+                  <Button onClick={() => setShowAddDomainModal(true)} variant="primary" size="sm">
+                    <FaPlus className="mr-2" /> Add Domain
+                  </Button>
+                </div>
+                
+                {domains.length === 0 ? (
+                  <div className="text-center py-8">
+                    <div className="text-gray-500 dark:text-gray-400">No domains configured</div>
                   </div>
-                ))}
-              </div>
+                ) : (
+                  <div className="space-y-4">
+                    {domains.map((domain) => (
+                      <div key={domain.id} className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg flex items-center justify-between">
+                        <div>
+                          <h3 className="font-medium text-gray-900 dark:text-white">
+                            {domain.ssl_enabled ? (domain.domain.startsWith(':') ? 'https://'+ systemInfo?.host + domain.domain : domain.domain) : (domain.domain.startsWith(':') ? 'http://'+ systemInfo?.host + domain.domain : `http://${domain.domain}`)}
+                          </h3>
+                          <div className="flex items-center space-x-2 mt-1">
+                            {domain.ssl_enabled && <Badge color="success" variant="light" size="sm">SSL Enabled</Badge>}
+                            {domain.is_primary && <Badge color="info" variant="light" size="sm">Primary</Badge>}
+                          </div>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <Button onClick={() => removeDomain(domain.id, domain.domain)} disabled={actionLoading === `remove-${domain.id}`} variant="outline" size="sm">
+                             <FaTrash className="text-red-600" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </ComponentCard>
         </TabsContent>

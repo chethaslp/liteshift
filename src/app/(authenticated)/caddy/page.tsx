@@ -302,6 +302,29 @@ export default function CaddyPage() {
         </div>
       </div>
     );
+  if (systemInfo?.reverse_proxy === 'cloudflare') {
+    return (
+      <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Reverse Proxy Settings</h1>
+        </div>
+        <div className="p-8 border border-gray-200 dark:border-gray-700 rounded-lg flex flex-col items-center justify-center text-center bg-white dark:bg-gray-800 shadow-sm mt-4">
+          <div className="w-16 h-16 bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 rounded-full flex items-center justify-center mb-6">
+            <FaExternalLinkAlt className="text-3xl" />
+          </div>
+          <h3 className="text-2xl font-semibold text-gray-900 dark:text-white mb-4">Cloudflare Tunnel is Active</h3>
+          <p className="text-gray-500 dark:text-gray-400 max-w-2xl mx-auto text-lg mb-6">
+            Your server is configured to use Cloudflare Tunnel as its reverse proxy. Caddy management is disabled. 
+            All domain routing, SSL termination, and proxy configurations must be managed directly from your Cloudflare Zero Trust dashboard.
+          </p>
+          <a href="https://one.dash.cloudflare.com/" target="_blank" rel="noopener noreferrer">
+            <Button variant="primary" size="md">
+              Open Cloudflare Dashboard
+            </Button>
+          </a>
+        </div>
+      </div>
+    );
   }
 
   return (
